@@ -1,0 +1,738 @@
+
+# # =-============================================================================
+# # 第0部分：导入库与全局初始化
+# # ==============================================================================
+# import edge_tts
+# import pygame
+# import asyncio
+# import os
+# import pandas as pd
+# import sys
+# import random
+# import time
+# import threading
+# from thefuzz import process
+# import hashlib
+# import shutil
+# import subprocess
+# import requests
+# import openpyxl
+# import json
+# import difflib
+# import string
+
+# try:
+#     from aiohttp.client_exceptions import WSServerHandshakeError
+# except ImportError:
+#     class WSServerHandshakeError(Exception): pass
+
+# class UnauthorizedError(Exception):
+#     pass
+
+# # 用于在终端打印彩色文字
+# class bcolors:
+#     RED = '\033[91m'
+#     GREEN = '\033[92m'
+#     YELLOW = '\033[93m'
+#     BLUE = '\033[94m'
+#     CYAN = '\033[96m'
+#     ENDC = '\033[0m'
+
+# class UI:
+#     WIDTH = 60
+#     @staticmethod
+#     def separator():
+#         print(bcolors.CYAN + "-" * UI.WIDTH + bcolors.ENDC)
+#     @staticmethod
+#     def header(text):
+#         width = 40
+#         print(bcolors.BLUE + "#" * width)
+#         print(f"###{(text.center(width - 6))}###")
+#         print("#" * width + bcolors.ENDC)
+#         UI.separator()
+#     @staticmethod
+#     def prompt(text):
+#         response = input(f"{bcolors.YELLOW}❓ {text}{bcolors.ENDC}")
+#         UI.separator()
+#         return response
+#     @staticmethod
+#     def info(text):
+#         print(f"{bcolors.YELLOW}ℹ️  {text}{bcolors.ENDC}")
+#     @staticmethod
+#     def success(text):
+#         print(f"{bcolors.GREEN}✅ {text}{bcolors.ENDC}")
+#     @staticmethod
+#     def error(text):
+#         print(f"{bcolors.RED}❌ {text}{bcolors.ENDC}")
+
+# pygame.mixer.init()
+# UI.success("Pygame Mixer 已成功初始化。")
+# UI.separator()
+
+
+# # ==============================================================================
+# # 第1部分：语音朗读应用 (代码1) - 核心函数与配置
+# # ==============================================================================
+# CACHE_DIR = "audio_cache"
+# STATE_FILE = "run_state.txt"
+# LEFTOVER_FILE = "leftover_sentences.txt"
+# SPELLING_ERROR_FILE = "spelling_errors.txt"
+# SPEECH_EXCEL_PATH = r'C:\Users\Administrator\Desktop\英国老鼠\工作簿1.xlsm'
+# os.makedirs(CACHE_DIR, exist_ok=True)
+
+# VOICE_SCORE_FILE = "voice_scores.json"
+# PRIMARY_RETRY_LIMIT = 50
+# FALLBACK_RETRY_LIMIT = 10
+# FALLBACK_COUNTRY = "United Kingdom"
+# # (语音库数据和国家代码映射省略，与前版相同)
+# voices_by_country = { "Afghanistan": ["ps-AF-GulNawazNeural", "ps-AF-LatifaNeural", "fa-AF-DilaraNeural", "fa-AF-FaridNeural"], "Albania": ["sq-AL-AnilaNeural", "sq-AL-IlirNeural"], "Algeria": ["ar-DZ-AminaNeural", "ar-DZ-IsmaelNeural"], "Argentina": ["es-AR-ElenaNeural", "es-AR-TomasNeural"], "Armenia": ["hy-AM-AnahitNeural", "hy-AM-HaykNeural"], "Australia": ["en-AU-NatashaNeural", "en-AU-WilliamNeural"], "Austria": ["de-AT-IngridNeural", "de-AT-JonasNeural"], "Azerbaijan": ["az-AZ-BabekNeural", "az-AZ-BanuNeural"], "Bahrain": ["ar-BH-AliNeural", "ar-BH-LailaNeural"], "Bangladesh": ["bn-BD-NabanitaNeural", "bn-BD-PradeepNeural"], "Basque": ["eu-ES-AinhoaNeural", "eu-ES-AnderNeural"], "Belarus": ["be-BY-AnastasiyaNeural", "be-BY-PavelNeural"], "Belgium": ["nl-BE-ArnaudNeural", "nl-BE-DenaNeural", "fr-BE-CharlineNeural", "fr-BE-GerardNeural"], "Bolivia": ["es-BO-MarceloNeural", "es-BO-SofiaNeural"], "Bosnia and Herzegovina": ["bs-BA-GoranNeural", "bs-BA-VesnaNeural"], "Brazil": ["pt-BR-AntonioNeural", "pt-BR-FranciscaNeural", "pt-BR-ThalitaNeural", "pt-BR-DonatoNeural", "pt-BR-BrendaNeural", "pt-BR-GiovannaNeural", "pt-BR-HumbertoNeural", "pt-BR-LeilaNeural", "pt-BR-LeticiaNeural", "pt-BR-ManuelaNeural", "pt-BR-NicolauNeural", "pt-BR-ValerioNeural", "pt-BR-YaraNeural"], "Bulgaria": ["bg-BG-BorislavNeural", "bg-BG-KalinaNeural"], "Burma": ["my-MM-NilarNeural", "my-MM-ThihaNeural"], "Cambodia": ["km-KH-PisethNeural", "km-KH-SreymomNeural"], "Canada": ["en-CA-ClaraNeural", "en-CA-LiamNeural", "fr-CA-AntoineNeural", "fr-CA-JeanNeural", "fr-CA-SylvieNeural", "fr-CA-HenriNeural"], "Catalan": ["ca-ES-EnricNeural", "ca-ES-JoanaNeural", "ca-ES-AlbaNeural"], "Chile": ["es-CL-LorenzoNeural", "es-CL-SofiaNeural"], "China (Liaoning)": ["zh-CN-liaoning-XiaobeiNeural"], "China (Mainland)": ["zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyouNeural", "zh-CN-YunxiNeural", "zh-CN-YunyangNeural", "zh-CN-YunyeNeural", "zh-CN-YunjianNeural", "zh-CN-XiaoyiNeural", "zh-CN-YunzeNeural", "zh-CN-XiaochenNeural", "zh-CN-XiaohanNeural", "zh-CN-XiaomengNeural", "zh-CN-XiaomoNeural", "zh-CN-XiaoqiuNeural", "zh-CN-XiaoruiNeural", "zh-CN-XiaoshuangNeural", "zh-CN-XiaoxuanNeural", "zh-CN-XiaoyanNeural", "zh-CN-XiaozhenNeural"], "China (Shaanxi)": ["zh-CN-shaanxi-XiaoniNeural"], "Colombia": ["es-CO-GonzaloNeural", "es-CO-SalomeNeural"], "Costa Rica": ["es-CR-JuanNeural", "es-CR-MariaNeural"], "Croatia": ["hr-HR-GabrijelaNeural", "hr-HR-SreckoNeural"], "Cuba": ["es-CU-ManuelNeural", "es-CU-YarinaNeural"], "Cyprus": ["el-CY-AndreasNeural", "el-CY-NafsikaNeural"], "Czech Republic": ["cs-CZ-AntoninNeural", "cs-CZ-VlastaNeural"], "Denmark": ["da-DK-ChristelNeural", "da-DK-JeppeNeural"], "Dominican Republic": ["es-DO-EmilioNeural", "es-DO-RamonaNeural"], "Ecuador": ["es-EC-AndreaNeural", "es-EC-LuisNeural"], "Egypt": ["ar-EG-SalmaNeural", "ar-EG-ShakirNeural"], "El Salvador": ["es-SV-LorenaNeural", "es-SV-RodrigoNeural"], "Equatorial Guinea": ["es-GQ-JavierNeural", "es-GQ-TeresaNeural"], "Estonia": ["et-EE-AnuNeural", "et-EE-KertNeural"], "Ethiopia": ["am-ET-AmehaNeural", "am-ET-MekdesNeural"], "Finland": ["fi-FI-HarriNeural", "fi-FI-NooraNeural", "fi-FI-SelmaNeural"], "France": ["fr-FR-DeniseNeural", "fr-FR-EloiseNeural", "fr-FR-HenriNeural", "fr-FR-AlainNeural", "fr-FR-BrigitteNeural", "fr-FR-CelesteNeural", "fr-FR-ClaudeNeural", "fr-FR-CoralieNeural", "fr-FR-JacquelineNeural", "fr-FR-JeromeNeural", "fr-FR-JosephineNeural", "fr-FR-MauriceNeural", "fr-FR-YvesNeural", "fr-FR-YvetteNeural"], "Galician": ["gl-ES-RoiNeural", "gl-ES-SabelaNeural"], "Georgia": ["ka-GE-EkaNeural", "ka-GE-GiorgiNeural"], "Germany": ["de-DE-AmalaNeural", "de-DE-ConradNeural", "de-DE-KatjaNeural", "de-DE-KillianNeural", "de-DE-ElkeNeural", "de-DE-GiselaNeural", "de-DE-KasperNeural"], "Greece": ["el-GR-AthinaNeural", "el-GR-NestorasNeural"], "Guatemala": ["es-GT-AndresNeural", "es-GT-MartaNeural"], "Honduras": ["es-HN-CarlosNeural", "es-HN-KarlaNeural"], "Hong Kong Sar": ["en-HK-SamNeural", "en-HK-YanNeural", "zh-HK-HiuGaaiNeural", "zh-HK-HiuMaanNeural", "zh-HK-WanLungNeural"], "Hungary": ["hu-HU-NoemiNeural", "hu-HU-TamasNeural"], "Iceland": ["is-IS-GudrunNeural", "is-IS-GunnarNeural"], "India": ["en-IN-NeerjaNeural", "en-IN-PrabhatNeural", "bn-IN-BashkarNeural", "bn-IN-TanishaNeural", "gu-IN-DhwaniNeural", "gu-IN-NiranjanNeural", "hi-IN-MadhurNeural", "hi-IN-SwaraNeural", "kn-IN-GaganNeural", "kn-IN-SapnaNeural", "ml-IN-MidhunNeural", "ml-IN-SobhanaNeural", "mr-IN-AarohiNeural", "mr-IN-ManoharNeural", "ta-IN-PallaviNeural", "ta-IN-ValluvarNeural", "te-IN-MohanNeural", "te-IN-ShrutiNeural", "ur-IN-GulNeural", "ur-IN-SalmanNeural"], "Indonesia": ["id-ID-ArdiNeural", "id-ID-GadisNeural", "jv-ID-DimasNeural", "jv-ID-SitiNeural", "su-ID-JajangNeural", "su-ID-TutiNeural"], "Iran": ["fa-IR-DilaraNeural", "fa-IR-FaridNeural"], "Iraq": ["ar-IQ-BasselNeural", "ar-IQ-RanaNeural"], "Ireland": ["en-IE-ConnorNeural", "en-IE-EmilyNeural", "ga-IE-ColmNeural", "ga-IE-OrlaNeural"], "Israel": ["he-IL-AvriNeural", "he-IL-HilaNeural"], "Italy": ["it-IT-DiegoNeural", "it-IT-ElsaNeural", "it-IT-IsabellaNeural", "it-IT-BenignoNeural", "it-IT-CalimeroNeural", "it-IT-CataldoNeural", "it-IT-FabiolaNeural", "it-IT-FiammaNeural", "it-IT-GianniNeural", "it-IT-ImeldaNeural", "it-IT-IrmaNeural", "it-IT-LisandroNeural", "it-IT-PalmiraNeural", "it-IT-PierinaNeural", "it-IT-RinaldoNeural"], "Japan": ["ja-JP-KeitaNeural", "ja-JP-NanamiNeural", "ja-JP-AoiNeural", "ja-JP-DaichiNeural", "ja-JP-MayuNeural", "ja-JP-NaokiNeural", "ja-JP-ShioriNeural"], "Jordan": ["ar-JO-SanaNeural", "ar-JO-TaimNeural"], "Kazakhstan": ["kk-KZ-AigulNeural", "kk-KZ-DauletNeural"], "Kenya": ["en-KE-AsiliaNeural", "en-KE-ChilembaNeural", "sw-KE-RafikiNeural", "sw-KE-ZuriNeural"], "Kuwait": ["ar-KW-FahedNeural", "ar-KW-NouraNeural"], "Kyrgyzstan": ["ky-KG-AibekNeural", "ky-KG-MederimNeural"], "Laos": ["lo-LA-ChanthavongNeural", "lo-LA-KeomanyNeural"], "Latvia": ["lv-LV-EveritaNeural", "lv-LV-NilsNeural"], "Lebanon": ["ar-LB-LaylaNeural", "ar-LB-RamiNeural"], "Libya": ["ar-LY-ImanNeural", "ar-LY-OmarNeural"], "Lithuania": ["lt-LT-LeonasNeural", "lt-LT-OnaNeural"], "Macedonia": ["mk-MK-AleksandarNeural", "mk-MK-MarijaNeural"], "Malaysia": ["ms-MY-OsmanNeural", "ms-MY-YasminNeural", "ta-MY-KaniNeural", "ta-MY-SuryaNeural"], "Mali": ["bm-ML-AdamaNeural", "bm-ML-FantaNeural"], "Malta": ["mt-MT-GraceNeural", "mt-MT-JosephNeural"], "Mexico": ["es-MX-DaliaNeural", "es-MX-JorgeNeural", "es-MX-BeatrizNeural", "es-MX-CandelaNeural", "es-MX-CarlotaNeural", "es-MX-CecilioNeural", "es-MX-GerardoNeural", "es-MX-LarissaNeural", "es-MX-LibertoNeural", "es-MX-LucianoNeural", "es-MX-MarinaNeural", "es-MX-NuriaNeural", "es-MX-PelayoNeural", "es-MX-RenataNeural", "es-MX-YagoNeural"], "Moldova": ["ro-MD-AnastasiaNeural", "ro-MD-VitalieNeural"], "Mongolia": ["mn-MN-BataaNeural", "mn-MN-YesuiNeural"], "Montenegro": ["sr-ME-JovanNeural", "sr-ME-PetarNeural"], "Morocco": ["ar-MA-JamalNeural", "ar-MA-MounaNeural"], "Nepal": ["ne-NP-SagarNeural", "ne-NP-AmritaNeural"], "Netherlands": ["nl-NL-ColetteNeural", "nl-NL-FennaNeural", "nl-NL-MaartenNeural"], "New Zealand": ["en-NZ-MitchellNeural", "en-NZ-MollyNeural"], "Nicaragua": ["es-NI-FedericoNeural", "es-NI-YolandaNeural"], "Nigeria": ["en-NG-AbeoNeural", "en-NG-EzinneNeural"], "Norway": ["nb-NO-FinnNeural", "nb-NO-PernilleNeural", "nb-NO-IselinNeural"], "Oman": ["ar-OM-AbdullahNeural", "ar-OM-AyshaNeural"], "Pakistan": ["ur-PK-AsadNeural", "ur-PK-UzmaNeural"], "Panama": ["es-PA-MargaritaNeural", "es-PA-RobertoNeural"], "Paraguay": ["es-PY-MarioNeural", "es-PY-TaniaNeural"], "Peru": ["es-PE-AlexNeural", "es-PE-CamilaNeural"], "Philippines": ["en-PH-JamesNeural", "en-PH-RosaNeural", "fil-PH-AngeloNeural", "fil-PH-BlessicaNeural"], "Poland": ["pl-PL-MarekNeural", "pl-PL-ZofiaNeural", "pl-PL-AgnieszkaNeural"], "Portugal": ["pt-PT-DuarteNeural", "pt-PT-FernandaNeural", "pt-PT-RaquelNeural"], "Puerto Rico": ["es-PR-KarinaNeural", "es-PR-VictorNeural"], "Qatar": ["ar-QA-AmalNeural", "ar-QA-MoazNeural"], "Romania": ["ro-RO-AlinaNeural", "ro-RO-EmilNeural"], "Russia": ["ru-RU-DmitryNeural", "ru-RU-SvetlanaNeural", "ru-RU-DariyaNeural"], "Saudi Arabia": ["ar-SA-HamedNeural", "ar-SA-ZariyahNeural"], "Senegal": ["wo-SN-AlphaNeural", "wo-SN-KhadijaNeural"], "Serbia": ["sr-RS-NicholasNeural", "sr-RS-SophieNeural"], "Singapore": ["en-SG-LunaNeural", "en-SG-WayneNeural", "ta-SG-AnbuNeural", "ta-SG-VenbaNeural"], "Slovakia": ["sk-SK-LukasNeural", "sk-SK-ViktoriaNeural"], "Slovenia": ["sl-SI-PetraNeural", "sl-SI-RokNeural"], "Somalia": ["so-SO-MuuseNeural", "so-SO-UbaxNeural"], "South Africa": ["en-ZA-LeahNeural", "en-ZA-LukeNeural", "af-ZA-AdriNeural", "af-ZA-WillemNeural", "zu-ZA-ThandoNeural", "zu-ZA-ThembaNeural"], "South Korea": ["ko-KR-InJoonNeural", "ko-KR-SunHiNeural", "ko-KR-BongJinNeural", "ko-KR-GookMinNeural", "ko-KR-HyunsuNeural", "ko-KR-JiMinNeural", "ko-KR-SeoHyeonNeural", "ko-KR-SoonBokNeural", "ko-KR-YuJinNeural"], "Spain": ["es-ES-AlvaroNeural", "es-ES-ElviraNeural", "es-ES-AbrilNeural", "es-ES-ArnauNeural", "es-ES-DarioNeural", "es-ES-EliasNeural", "es-ES-EstrellaNeural", "es-ES-IreneNeural", "es-ES-LaiaNeural", "es-ES-LiaNeural", "es-ES-NilNeural", "es-ES-SaulNeural", "es-ES-TeoNeural", "es-ES-TrianaNeural", "es-ES-VeraNeural"], "Sri Lanka": ["si-LK-DinuraNeural", "si-LK-ThiliniNeural", "ta-LK-KumarNeural", "ta-LK-SaranyaNeural"], "Sweden": ["sv-SE-MattiasNeural", "sv-SE-SofieNeural", "sv-SE-HilleviNeural"], "Switzerland": ["de-CH-JanNeural", "de-CH-LeniNeural", "fr-CH-ArianeNeural", "fr-CH-FabriceNeural", "it-CH-GiuseppeNeural", "it-CH-IsidoraNeural"], "Syria": ["ar-SY-AmanyNeural", "ar-SY-LaithNeural"], "Taiwan": ["zh-TW-HsiaoChenNeural", "zh-TW-HsiaoYuNeural", "zh-TW-YunJheNeural"], "Tanzania": ["en-TZ-ElimuNeural", "en-TZ-ImaniNeural", "sw-TZ-DaudiNeural", "sw-TZ-RehemaNeural"], "Thailand": ["th-TH-NiwatNeural", "th-TH-PremwadeeNeural"], "Tunisia": ["ar-TN-HediNeural", "ar-TN-ReemNeural"], "Turkey": ["tr-TR-AhmetNeural", "tr-TR-EmelNeural"], "Turkmenistan": ["tk-TM-MerdanNeural", "tk-TM-TovusNeural"], "Ukraine": ["uk-UA-OstapNeural", "uk-UA-PolinaNeural"], "United Arab Emirates": ["ar-AE-FatimaNeural", "ar-AE-HamdanNeural"], "United Kingdom": ["en-GB-LibbyNeural", "en-GB-MaisieNeural", "en-GB-RyanNeural", "en-GB-SoniaNeural", "en-GB-ThomasNeural", "en-GB-AbbiNeural", "en-GB-AlfieNeural", "en-GB-BellaNeural", "en-GB-ElliotNeural", "en-GB-EthanNeural", "en-GB-HollieNeural", "en-GB-NoahNeural", "en-GB-OliverNeural", "en-GB-OliviaNeural"], "United States": ["en-US-JennyNeural", "en-US-GuyNeural", "en-US-AriaNeural",  "en-US-TonyNeural", "en-US-AnaNeural", "en-US-AndrewNeural", "en-US-BrianNeural", "en-US-ChristopherNeural", "en-US-EmmaNeural", "en-US-EricNeural",  "en-US-MichelleNeural","en-US-RogerNeural", "en-US-SteffanNeural", "es-US-AlonsoNeural", "es-US-PalomaNeural"], "Uruguay": ["es-UY-FacundoNeural", "es-UY-ValentinaNeural"], "Uzbekistan": ["uz-UZ-MadinaNeural", "uz-UZ-SardorNeural"], "Venezuela": ["es-VE-PaolaNeural", "es-VE-SebastianNeural"], "Vietnam": ["vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural"], "Wales": ["cy-GB-AledNeural", "cy-GB-NiaNeural"], "Yemen": ["ar-YE-MaryamNeural", "ar-YE-SalehNeural"] }
+# country_code_map = { "AF": "Afghanistan", "AL": "Albania", "DZ": "Algeria", "AR": "Argentina", "AM": "Armenia", "AU": "Australia", "AT": "Austria", "AZ": "Azerbaijan", "BH": "Bahrain", "BD": "Bangladesh", "BY": "Belarus", "BE": "Belgium", "BO": "Bolivia", "BA": "Bosnia and Herzegovina", "BR": "Brazil", "BG": "Bulgaria", "MM": "Burma", "KH": "Cambodia", "CA": "Canada", "CL": "Chile", "CN": "China (Mainland)", "CN-LN": "China (Liaoning)", "CN-SN": "China (Shaanxi)", "CO": "Colombia", "CR": "Costa Rica", "HR": "Croatia", "CU": "Cuba", "CY": "Cyprus", "CZ": "Czech Republic", "DK": "Denmark", "DO": "Dominican Republic", "EC": "Ecuador", "EG": "Egypt", "SV": "El Salvador", "GQ": "Equatorial Guinea", "EE": "Estonia", "ET": "Ethiopia", "FI": "Finland", "FR": "France", "GE": "Georgia", "DE": "Germany", "GR": "Greece", "GT": "Guatemala", "HN": "Honduras", "HK": "Hong Kong Sar", "HU": "Hungary", "IS": "Iceland", "IN": "India", "ID": "Indonesia", "IR": "Iran", "IQ": "Iraq", "IE": "Ireland", "IL": "Israel", "IT": "Italy", "JP": "Japan", "JO": "Jordan", "KZ": "Kazakhstan", "KE": "Kenya", "KW": "Kuwait", "KG": "Kyrgyzstan", "LA": "Laos", "LV": "Latvia", "LB": "Lebanon", "LY": "Libya", "LT": "Lithuania", "MK": "Macedonia", "MY": "Malaysia", "ML": "Mali", "MT": "Malta", "MX": "Mexico", "MD": "Moldova", "MN": "Mongolia", "ME": "Montenegro", "MA": "Morocco", "NP": "Nepal", "NL": "Netherlands", "NZ": "New Zealand", "NI": "Nicaragua", "NG": "Nigeria", "NO": "Norway", "OM": "Oman", "PK": "Pakistan", "PA": "Panama", "PY": "Paraguay", "PE": "Peru", "PH": "Philippines", "PL": "Poland", "PT": "Portugal", "PR": "Puerto Rico", "QA": "Qatar", "RO": "Romania", "RU": "Russia", "SA": "Saudi Arabia", "SN": "Senegal", "RS": "Serbia", "SG": "Singapore", "SK": "Slovakia", "SI": "Slovenia", "SO": "Somalia", "ZA": "South Africa", "KR": "South Korea", "ES": "Spain", "LK": "Sri Lanka", "SE": "Sweden", "CH": "Switzerland", "SY": "Syria", "TW": "Taiwan", "TZ": "Tanzania", "TH": "Thailand", "TN": "Tunisia", "TR": "Turkey", "TM": "Turkmenistan", "UA": "Ukraine", "AE": "United Arab Emirates", "GB": "United Kingdom", "UK": "United Kingdom", "US": "United States", "UY": "Uruguay", "UZ": "Uzbekistan", "VE": "Venezuela", "VN": "Vietnam", "YE": "Yemen" }
+
+# def load_voice_scores():
+#     if not os.path.exists(VOICE_SCORE_FILE): return {}
+#     try:
+#         with open(VOICE_SCORE_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+#     except (json.JSONDecodeError, IOError): return {}
+# def save_voice_scores(scores):
+#     try:
+#         with open(VOICE_SCORE_FILE, 'w', encoding='utf-8') as f: json.dump(scores, f, indent=4)
+#     except IOError: UI.error(f"无法写入声音评分文件 {VOICE_SCORE_FILE}")
+# def update_voice_score(voice, change):
+#     scores = load_voice_scores(); scores[voice] = scores.get(voice, 0) + change; save_voice_scores(scores)
+# def get_prioritized_voices(country_voices, scores, tried_voices):
+#     available_voices = [v for v in country_voices if v not in tried_voices]
+#     return sorted(available_voices, key=lambda v: scores.get(v, 0), reverse=True)
+# def handle_auth_error_and_exit():
+#     UI.error("所有重试尝试均失败，包括降级到英国口音。"); UI.info("这很可能是因为库版本过旧。正在尝试自动更新...");
+#     try:
+#         command = [sys.executable, "-m", "pip", "install", "--upgrade", "edge-tts"]; subprocess.run(command, capture_output=True, text=True, check=True); UI.success("'edge-tts' 库已成功更新！")
+#     except Exception as e:
+#         UI.error(f"自动更新时发生错误: {e}")
+#     UI.header("重要：请重启内核 (快捷键: Ctrl + .) 然后按 F5 重新运行程序。")
+#     pygame.quit(); sys.exit(0)
+# def run_async_task_in_thread(coro):
+#     exception = None
+#     def target():
+#         nonlocal exception
+#         try:
+#             loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+#             loop.run_until_complete(coro); loop.close()
+#         except Exception as e: exception = e
+#     thread = threading.Thread(target=target); thread.start(); thread.join()
+#     if exception: raise exception
+# async def generate_speech(text, voice, filename, retries=3):
+#     for attempt in range(retries):
+#         try:
+#             communicate = edge_tts.Communicate(text, voice); await communicate.save(filename); return
+#         except edge_tts.exceptions.NoAudioReceived as e:
+#             if attempt < retries - 1: await asyncio.sleep(1)
+#             else: raise e
+# def speak_sentence(text_to_speak, voice_id):
+#     cached_filepath = ""
+#     try:
+#         sentence_hash = hashlib.md5(text_to_speak.encode('utf-8')).hexdigest()
+#         safe_voice_id = voice_id.replace(":", "-")
+#         cached_filename = f"{sentence_hash}_{safe_voice_id}.mp3"
+#         cached_filepath = os.path.join(CACHE_DIR, cached_filename)
+#         generated_new_file = False
+#         if not os.path.exists(cached_filepath) or os.path.getsize(cached_filepath) == 0:
+#             UI.info("... 正在生成高质量语音 ...")
+#             speech_coroutine = generate_speech(text_to_speak, voice_id, cached_filepath)
+#             run_async_task_in_thread(speech_coroutine)
+#             if not os.path.exists(cached_filepath) or os.path.getsize(cached_filepath) == 0: return False
+#             generated_new_file = True
+#         pygame.mixer.music.load(cached_filepath); pygame.mixer.music.play(); UI.info("... 🔊 正在朗读 ...")
+#         while pygame.mixer.music.get_busy(): time.sleep(0.1)
+#         pygame.mixer.music.unload()
+#         return 'GENERATED' if generated_new_file else 'CACHED'
+#     except (WSServerHandshakeError, edge_tts.exceptions.NoAudioReceived, Exception) as e:
+#         error_str = str(e).lower()
+#         if "401" in error_str or "unauthorized" in error_str or ("status" in dir(e) and hasattr(e, 'status') and e.status == 401):
+#             raise UnauthorizedError(f"Original error: {e}") from e
+#         UI.error(f"发生网络或播放错误: {e}")
+#         if isinstance(e, pygame.error) and cached_filepath and os.path.exists(cached_filepath): os.remove(cached_filepath)
+#         return False
+# def find_country_by_code(user_input, code_map):
+#     if not user_input: return None
+#     return code_map.get(user_input.upper())
+
+# def cleanup_on_exit(final_index, sentences):
+#     pygame.quit()
+#     UI.info("Pygame Mixer 已被卸载。")
+#     if not sentences or final_index >= len(sentences):
+#         UI.success("所有句子已完成，程序正常结束。")
+#         for f in [STATE_FILE, LEFTOVER_FILE]:
+#             if os.path.exists(f): os.remove(f)
+#         if os.path.exists(CACHE_DIR):
+#             try: shutil.rmtree(CACHE_DIR); UI.info(f"音频缓存目录 '{CACHE_DIR}' 已成功删除。")
+#             except Exception as e: UI.error(f"清理缓存时发生错误: {e}")
+#     else:
+#         UI.info("程序已退出。")
+#         unread_sentences = sentences[final_index:]
+#         if unread_sentences:
+#             with open(LEFTOVER_FILE, 'w', encoding='utf-8') as f:
+#                 for sentence in unread_sentences: f.write(sentence + '\n')
+#             UI.info(f"已将 {len(unread_sentences)} 个未读句子保存到 '{LEFTOVER_FILE}'。")
+
+# def check_and_highlight_spelling(original_sentence, user_spelling):
+#     translator = str.maketrans('', '', string.punctuation)
+#     original_words = [word.translate(translator).lower() for word in original_sentence.split()]
+#     user_words = [word.translate(translator).lower() for word in user_spelling.split()]
+#     matcher = difflib.SequenceMatcher(None, original_words, user_words)
+#     is_correct = True
+#     highlighted_parts = []
+#     original_sentence_words = original_sentence.split()
+#     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+#         original_chunk = " ".join(original_sentence_words[i1:i2])
+#         if tag == 'equal': highlighted_parts.append(original_chunk)
+#         else:
+#             is_correct = False
+#             if original_chunk:
+#                 highlighted_parts.append(f"{bcolors.RED}({original_chunk}){bcolors.ENDC}")
+#     highlighted_string = " ".join(highlighted_parts)
+#     return is_correct, highlighted_string
+
+# def save_spelling_error_sentence(sentence):
+#     if not sentence: return
+#     try:
+#         existing_errors = []
+#         if os.path.exists(SPELLING_ERROR_FILE):
+#             with open(SPELLING_ERROR_FILE, 'r', encoding='utf-8') as f:
+#                 existing_errors = [line.strip() for line in f]
+#         if sentence in existing_errors:
+#             UI.info(f"句子 '{sentence[:30]}...' 已存在于错误文件中。")
+#             return
+#         with open(SPELLING_ERROR_FILE, 'a', encoding='utf-8') as f:
+#             f.write(sentence + '\n')
+#         UI.info(f"已将错误句子 '{sentence[:30]}...' 记录到 {SPELLING_ERROR_FILE}")
+#     except Exception as e:
+#         UI.error(f"保存拼写错误时发生错误: {e}")
+
+# def print_available_countries(available_voices, code_map):
+#     print(f"🎤 {bcolors.CYAN}以下是当前可用的国家/地区及其代码：{bcolors.ENDC}")
+#     available_countries = sorted(available_voices.keys())
+#     if not available_countries:
+#         UI.info("没有找到可用的国家。")
+#         UI.separator()
+#         return
+
+#     max_len = max(len(c) for c in available_countries)
+#     num_columns = 2
+#     while len(available_countries) % num_columns != 0:
+#         available_countries.append("")
+#     num_rows = len(available_countries) // num_columns
+    
+#     for i in range(num_rows):
+#         row_items = []
+#         for j in range(num_columns):
+#             country = available_countries[i + j * num_rows]
+#             if country:
+#                 codes = [k for k, v in code_map.items() if v == country]
+#                 code_str = "/".join(codes)
+#                 row_items.append(f"{bcolors.GREEN}{code_str:<5}{bcolors.ENDC} - {country:<{max_len}}")
+#         print(" | ".join(row_items))
+#     UI.separator()
+
+# def create_voice_map_dynamically(code_map, fallback_voices):
+#     UI.info("🌐 正在动态获取最新的语音列表...")
+#     UI.separator()
+#     voices_by_country_dynamic = {}
+#     async def fetch_and_build():
+#         voices = await edge_tts.list_voices()
+#         for voice in voices:
+#             locale = voice.get('Locale', '')
+#             parts = locale.split('-')
+#             if len(parts) >= 2:
+#                 country_code = parts[1]
+#                 country_name = code_map.get(country_code.upper())
+#                 if country_name:
+#                     if country_name not in voices_by_country_dynamic:
+#                         voices_by_country_dynamic[country_name] = []
+#                     voices_by_country_dynamic[country_name].append(voice['Name'])
+#     try:
+#         run_async_task_in_thread(fetch_and_build())
+#     except Exception as e:
+#         UI.error(f"动态获取语音列表时发生错误: {e}")
+#         UI.info("将使用内置的备用语音列表。")
+#         UI.separator()
+#         return fallback_voices
+#     if not voices_by_country_dynamic:
+#         UI.error("未能动态获取到任何语音，将使用内置的备用语音列表。")
+#         UI.separator()
+#         return fallback_voices
+    
+#     UI.success("成功构建了最新的语音库！")
+#     UI.separator()
+#     print_available_countries(voices_by_country_dynamic, code_map)
+#     return voices_by_country_dynamic
+
+# # ==============================================================================
+# # 第2部分：在线词典应用
+# # ==============================================================================
+# DICT_EXCEL_PATH = "C:/Users/Administrator/Desktop/英国老鼠/熟词.xlsx"; DICT_SHEET_NAME = "Sheet1"; WORD_CACHE_FILE = "word_cache.txt"
+
+# # <<< --- 从这里开始添加韦氏词典代码 --- >>>
+# # --- 韦氏词典 API 配置 ---
+# MW_API_KEYS = [
+#     "aac6ea0e-417c-4eaf-ac85-0dc8f8a6ba13",
+#     "93b2ec9c-d00c-4517-810a-ad2f8853fdfc",
+# ]
+# current_mw_api_key_index = 0
+
+# def get_current_mw_api_key():
+#     global current_mw_api_key_index
+#     if not MW_API_KEYS: return None
+#     return MW_API_KEYS[current_mw_api_key_index]
+
+# def switch_to_next_mw_api_key():
+#     global current_mw_api_key_index
+#     if len(MW_API_KEYS) <= 1: return
+#     previous_index = current_mw_api_key_index
+#     current_mw_api_key_index = (current_mw_api_key_index + 1) % len(MW_API_KEYS)
+#     UI.info(f"🔄 API Key 切换: ...{MW_API_KEYS[previous_index][-6:]} -> ...{get_current_mw_api_key()[-6:]}")
+
+# def print_mw_rate_limit_info(headers):
+#     limit = headers.get('X-RateLimit-Limit')
+#     remaining = headers.get('X-RateLimit-Remaining')
+#     if limit and remaining:
+#         UI.info(f"📊 韦氏词典API使用情况 (Key ...{get_current_mw_api_key()[-6:]}): 剩余 {remaining} / {limit} 次请求。")
+#         sys.stdout.flush()
+#         if int(remaining) <= 1:
+#             switch_to_next_mw_api_key()
+
+# def get_word_definition_merriam(word):
+#     api_key = get_current_mw_api_key()
+#     if not api_key:
+#         UI.error("韦氏词典API Key列表为空。")
+#         return False
+#     url = f"https://www.dictionaryapi.com/api/v3/references/collegiate/json/{word}?key={api_key}"
+#     print(f"📚 {bcolors.CYAN}正在通过韦氏词典查询: {word}{bcolors.ENDC}")
+#     try:
+#         response = requests.get(url, timeout=10)
+#         print_mw_rate_limit_info(response.headers)
+#         response.raise_for_status()
+#         data = response.json()
+#         if not data or not isinstance(data[0], dict):
+#             suggestions = data if isinstance(data, list) and all(isinstance(i, str) for i in data) else []
+#             UI.error(f"韦氏词典中没有找到单词 '{word}'。")
+#             if suggestions: UI.info(f"拼写建议: {', '.join(suggestions)}")
+#             return False
+#         found_definition = False
+#         print(f"单词: {bcolors.GREEN}{word.capitalize()}{bcolors.ENDC}")
+#         for entry in data:
+#             if isinstance(entry, dict) and entry.get('meta', {}).get('id', '').split(':')[0].lower() == word.lower():
+#                 if 'fl' in entry: print(f"\n【{bcolors.CYAN}{entry['fl']}{bcolors.ENDC}】")
+#                 if 'shortdef' in entry:
+#                     for i, definition in enumerate(entry['shortdef']):
+#                         clean_def = definition.replace('{bc}', '').replace('{it}', '').replace('{/it}', '')
+#                         print(f"  {i+1}. {clean_def}")
+#                     found_definition = True
+#         return found_definition
+#     except requests.exceptions.RequestException as e:
+#         UI.error(f"网络连接错误: {e}")
+#     except Exception as e:
+#         UI.error(f"解析韦氏词典数据时发生未知错误: {e}")
+#     return False
+# # <<< --- 在这里结束添加 --- >>>
+
+
+# def save_word_to_cache(word, cache_filepath):
+#     try:
+#         with open(cache_filepath, 'a', encoding='utf-8') as f: f.write(word + '\n')
+#         UI.success(f"单词 '{word}' 已缓存，将在下次启动时保存。")
+#     except Exception as e: UI.error(f"缓存单词时发生错误: {e}")
+# def _write_words_to_excel_core(words, filepath, sheetname):
+#     if not words: return True
+#     try:
+#         directory = os.path.dirname(filepath)
+#         if directory and not os.path.exists(directory): os.makedirs(directory)
+#         workbook = openpyxl.load_workbook(filepath) if os.path.exists(filepath) else openpyxl.Workbook()
+#         if sheetname in workbook.sheetnames: sheet = workbook[sheetname]
+#         else:
+#             sheet = workbook.create_sheet(sheetname) if len(workbook.sheetnames) > 0 and workbook.sheetnames[0] != 'Sheet' else workbook.active
+#             sheet.title = sheetname
+#         target_row = 1
+#         while sheet.cell(row=target_row, column=1).value is not None: target_row += 1
+#         for word in words: sheet.cell(row=target_row, column=1, value=word); target_row += 1
+#         workbook.save(filepath)
+#         UI.success(f"成功！{len(words)} 个缓存的单词已保存到Excel。")
+#         return True
+#     except PermissionError: UI.error(f"无法写入Excel！请先关闭正在打开的文件 '{filepath}'。"); return False
+#     except Exception as e: UI.error(f"写入Excel时发生未知错误: {e}"); return False
+
+# def get_word_definition(word):
+#     print(f"📚 {bcolors.CYAN}正在查询单词: {word}{bcolors.ENDC}")
+#     url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
+#     for attempt in range(3):
+#         try:
+#             response = requests.get(url, timeout=10)
+#             if response.status_code == 200:
+#                 data = response.json()[0]
+#                 print(f"单词: {bcolors.GREEN}{data['word']}{bcolors.ENDC}")
+#                 for meaning in data['meanings']:
+#                     print(f"\n【{bcolors.CYAN}{meaning['partOfSpeech']}{bcolors.ENDC}】")
+#                     for i, definition in enumerate(meaning['definitions']):
+#                         print(f"{i+1}. {definition['definition']}")
+#                 return True
+#             elif response.status_code == 404:
+#                 UI.error(f"抱歉，词典中没有找到单词 '{word}'。")
+#                 return False
+#             else:
+#                 UI.error(f"查询出错，状态码: {response.status_code} (尝试 {attempt + 1}/3)")
+#         except requests.exceptions.RequestException as e:
+#             UI.error(f"网络连接错误: {e} (尝试 {attempt + 1}/3)")
+#         if attempt < 2:
+#             UI.info("将在1秒后重试...")
+#             time.sleep(1)
+#     UI.error("查询失败，已达到最大重试次数。")
+#     return False
+
+# # ==============================================================================
+# # 第3部分：应用切换逻辑
+# # ==============================================================================
+# speech_app_initialized = False; sentences = []; current_index = 0
+# default_country = "United States"; last_used_voice = None; word_to_lookup_on_switch = None
+# def initialize_speech_app():
+#     global sentences, current_index, speech_app_initialized
+#     if speech_app_initialized: return True
+#     UI.info("正在初始化语音朗读程序...")
+#     load_from_excel = True
+#     if os.path.exists(LEFTOVER_FILE) and os.path.getsize(LEFTOVER_FILE) > 0:
+#         with open(LEFTOVER_FILE, 'r', encoding='utf-8') as f: leftover = [line.strip() for line in f if line.strip()]
+#         if leftover:
+#             UI.separator()
+#             choice = UI.prompt(f"检测到上次有 {len(leftover)} 句未读，是否继续？(Y/n): ").strip().lower()
+#             if choice in ['y', 'yes', '']: sentences = leftover; load_from_excel = False
+#     if load_from_excel:
+#         try:
+#             df = pd.read_excel(SPEECH_EXCEL_PATH, header=None); raw = df.iloc[:, 0].tolist()
+#             sentences = [str(s).strip().replace('\n', ' ') for s in raw if pd.notna(s) and str(s).strip()]
+#             if not sentences: UI.error(f"Excel文件 '{SPEECH_EXCEL_PATH}' 为空。"); UI.separator(); return False
+#             UI.success(f"成功从Excel读取 {len(sentences)} 个句子并打乱顺序。")
+#             random.shuffle(sentences)
+#         except FileNotFoundError: UI.error(f"文件未找到 '{SPEECH_EXCEL_PATH}'。"); UI.separator(); return False
+#         except Exception as e: UI.error(f"读取Excel时发生错误: {e}。"); UI.separator(); return False
+#     start_index = 0
+#     if os.path.exists(STATE_FILE):
+#         try:
+#             with open(STATE_FILE, 'r') as f: content = f.read().strip()
+#             if content:
+#                 saved_index_str, saved_hash = content.split('|')
+#                 current_hash = hashlib.md5("".join(sentences).encode('utf-8')).hexdigest()
+#                 if current_hash == saved_hash: start_index = int(saved_index_str)
+#         except Exception: pass
+#     current_index = start_index
+#     UI.info(f"语音朗读准备就绪，将从第 {current_index + 1} 句开始。")
+#     speech_app_initialized = True; return True
+
+# def handle_spelling_session(sentence, voice):
+#     typed_so_far = ""
+#     while True:
+#         print(f"\n✍️  当前已输入: {bcolors.CYAN}{typed_so_far}{bcolors.ENDC}")
+#         prompt_text = "输入 '.' 提交, Enter 重听, 或继续输入: "
+#         try:
+#             user_action = UI.prompt(prompt_text)
+#         except (KeyboardInterrupt, EOFError):
+#              print("\n"); UI.error("拼写已取消。"); return None
+#         if user_action == "":
+#             UI.info("...重听音频..."); speak_sentence(sentence, voice); UI.separator(); continue
+#         if user_action == ".":
+#             return typed_so_far
+#         if typed_so_far:
+#             typed_so_far += " " + user_action
+#         else:
+#             typed_so_far = user_action
+
+# def handle_speech_interaction():
+#     global current_index, default_country, last_used_voice, sentences, voices_by_country, country_code_map
+    
+#     current_sentence = sentences[current_index]
+    
+#     print(f"🎤 {bcolors.CYAN}--- 语音朗读 ({current_index + 1}/{len(sentences)}) ---{bcolors.ENDC}")
+#     print(f"   句子: '{current_sentence}'")
+    
+#     played_successfully = False
+    
+#     if last_used_voice is None:
+#         tried_voices_this_sentence = set()
+#         voice_scores = load_voice_scores()
+#         country_voices = voices_by_country.get(default_country, [])
+#         candidate_voices = [v for v in country_voices if v != last_used_voice]
+#         first_try_voice = random.choice(candidate_voices) if candidate_voices else (country_voices[0] if country_voices else None)
+#         if first_try_voice:
+#             tried_voices_this_sentence.add(first_try_voice)
+#             try:
+#                 UI.info(f"首次尝试 (随机选择，权重: {voice_scores.get(first_try_voice, 0)}): {first_try_voice}")
+#                 result = speak_sentence(current_sentence, first_try_voice)
+#                 if result:
+#                     if result == 'GENERATED': update_voice_score(first_try_voice, 1)
+#                     last_used_voice = first_try_voice; played_successfully = True
+#             except UnauthorizedError:
+#                 UI.error(f"首次尝试的声音 '{first_try_voice}' 授权失败。将启动健壮模式...")
+#                 update_voice_score(first_try_voice, -1)
+#         if not played_successfully:
+#             def attempt_playback_robust(country, limit, is_fallback=False):
+#                 nonlocal played_successfully; global last_used_voice
+#                 stage_name = "后备" if is_fallback else "主"
+#                 UI.info(f"{stage_name}重试 (基于权重): {country} (最多 {limit} 次)...")
+#                 for attempt in range(limit):
+#                     voices_to_try = voices_by_country.get(country, [])
+#                     prioritized_list = get_prioritized_voices(voices_to_try, voice_scores, tried_voices_this_sentence)
+#                     if not prioritized_list: UI.error(f"{stage_name}国家所有可用声音均已尝试。"); return
+#                     current_voice = prioritized_list[0]; tried_voices_this_sentence.add(current_voice)
+#                     try:
+#                         UI.info(f"尝试{stage_name}声音 (权重: {voice_scores.get(current_voice, 0)}): {current_voice} ({attempt + 1}/{limit})")
+#                         result = speak_sentence(current_sentence, current_voice)
+#                         if result:
+#                             if result == 'GENERATED': update_voice_score(current_voice, 1)
+#                             last_used_voice = current_voice; played_successfully = True; return
+#                     except UnauthorizedError:
+#                         UI.error(f"声音 '{current_voice}' 授权失败。"); update_voice_score(current_voice, -1); time.sleep(0.5)
+#             attempt_playback_robust(default_country, PRIMARY_RETRY_LIMIT)
+#             if not played_successfully: attempt_playback_robust(FALLBACK_COUNTRY, FALLBACK_RETRY_LIMIT, is_fallback=True)
+#     else:
+#         UI.info(f"重复播放 (使用缓存声音，权重: {load_voice_scores().get(last_used_voice, 0)}): {last_used_voice}")
+#         result = speak_sentence(current_sentence, last_used_voice)
+#         if result: played_successfully = True
+#         else: UI.error(f"缓存文件播放失败，将尝试重新选择声音。"); last_used_voice = None
+
+#     if not played_successfully:
+#         UI.error("播放失败，无法继续。")
+#         if last_used_voice is None: handle_auth_error_and_exit()
+#         UI.separator()
+#         return 'CONTINUE'
+
+#     UI.separator()
+#     prompt_text = "指令: (s)句子 (w)单词, (.)下一句, (l)上一句, (v)看语音库, (z)换人, (Enter)重听, (q)退出: "
+#     user_input = UI.prompt(prompt_text).strip()
+#     lower_input = user_input.lower()
+
+#     if lower_input == 's':
+#         user_spelling = handle_spelling_session(sentence, last_used_voice)
+#         if user_spelling is None: return 'CONTINUE'
+#         is_correct, highlighted_string = check_and_highlight_spelling(current_sentence, user_spelling)
+#         print(f"✍️  {bcolors.CYAN}--- 拼写检查结果 ---{bcolors.ENDC}"); print(f"   结果: {highlighted_string}")
+#         if is_correct: UI.success("句子拼写完全正确！")
+#         else: UI.error("句子拼写有误。"); save_spelling_error_sentence(current_sentence)
+#         UI.separator()
+#         return 'CONTINUE'
+    
+#     elif lower_input == 'w':
+#         user_words_input = handle_spelling_session(current_sentence, last_used_voice)
+#         if user_words_input is None: return 'CONTINUE'
+#         translator = str.maketrans('', '', string.punctuation)
+#         clean_original_words = {word.translate(translator).lower() for word in current_sentence.split()}
+#         user_words = user_words_input.split()
+#         all_found = True
+#         not_found_words = []
+#         for word in user_words:
+#             if word.strip() and word.translate(translator).lower() not in clean_original_words:
+#                 all_found = False
+#                 not_found_words.append(word)
+#         if all_found:
+#             UI.success(f"单词/词组 '{user_words_input}' 均存在于句子中，拼写正确！")
+#         else:
+#             UI.error(f"单词 '{', '.join(not_found_words)}' 不在句子中或拼写错误。")
+#             save_spelling_error_sentence(current_sentence)
+#         UI.separator()
+#         return 'CONTINUE'
+
+#     if lower_input in ['.', '。', 'n']:
+#         current_index += 1; last_used_voice = None
+#     elif user_input == '': pass
+#     elif lower_input == 'l':
+#         current_index = max(0, current_index - 1); last_used_voice = None
+#     elif lower_input == 'z': last_used_voice = None
+#     elif lower_input == 'v':
+#         print_available_countries(voices_by_country, country_code_map)
+#     elif lower_input == 'q': return 'QUIT'
+#     elif lower_input == 'm': return 'GOTO_MENU'
+#     elif lower_input == '2': return 'SWITCH_TO_2'
+#     else:
+#         matched_country = find_country_by_code(user_input, country_code_map)
+#         if matched_country:
+#             default_country = matched_country; UI.info(f"国家已切换到: {default_country}。"); last_used_voice = None
+#         else:
+#             return ('SWITCH_TO_2_WITH_WORD', user_input)
+#     return 'CONTINUE'
+
+# def prompt_for_error_rerun():
+#     global sentences, current_index, speech_app_initialized
+#     if not os.path.exists(SPELLING_ERROR_FILE) or os.path.getsize(SPELLING_ERROR_FILE) == 0:
+#         return False
+#     choice = UI.prompt(f"检测到 {SPELLING_ERROR_FILE} 中有内容，是否开始复习？ (Y/n): ").strip().lower()
+#     if choice in ['y', 'yes', '']:
+#         UI.info(f"正在从 {SPELLING_ERROR_FILE} 加载复习内容...")
+#         try:
+#             with open(SPELLING_ERROR_FILE, 'r', encoding='utf-8') as f:
+#                 error_content = list(dict.fromkeys([line.strip() for line in f if line.strip()]))
+#             if not error_content:
+#                 os.remove(SPELLING_ERROR_FILE); return False
+#             sentences = error_content
+#             current_index = 0
+#             speech_app_initialized = True
+#             random.shuffle(sentences)
+#             UI.success(f"加载成功！将开始复习 {len(sentences)} 个错误项目。")
+#             os.remove(SPELLING_ERROR_FILE)
+#             UI.separator()
+#             return True
+#         except Exception as e:
+#             UI.error(f"从错误文件加载时出错: {e}")
+#             if os.path.exists(SPELLING_ERROR_FILE): os.remove(SPELLING_ERROR_FILE)
+#             UI.separator()
+#             return False
+#     else:
+#         UI.info(f"好的，将清空并删除 {SPELLING_ERROR_FILE}。")
+#         if os.path.exists(SPELLING_ERROR_FILE): os.remove(SPELLING_ERROR_FILE)
+#         UI.separator()
+#         return False
+
+# # ==============================================================================
+# # 第4部分：主控制器
+# # ==============================================================================
+# def process_word_cache_on_startup():
+#     if not os.path.exists(WORD_CACHE_FILE) or os.path.getsize(WORD_CACHE_FILE) == 0: return
+#     UI.info("正在处理单词缓存...")
+#     UI.separator()
+#     try:
+#         # 1. 先读取当前Excel中的单词总数
+#         try:
+#             workbook = openpyxl.load_workbook(DICT_EXCEL_PATH)
+#             sheet = workbook[DICT_SHEET_NAME]
+#             current_total = sheet.max_row
+#         except (FileNotFoundError, KeyError):
+#             current_total = 0
+        
+#         # 2. 读取缓存文件
+#         with open(WORD_CACHE_FILE, 'r', encoding='utf-8') as f:
+#             words_to_save = list(dict.fromkeys([line.strip() for line in f if line.strip()]))
+        
+#         if not words_to_save: 
+#             os.remove(WORD_CACHE_FILE)
+#             UI.info(f"当前熟词库 '{os.path.basename(DICT_EXCEL_PATH)}' 中共有 {current_total} 个单词。")
+#             UI.separator()
+#             return
+
+#         # 3. 写入新单词
+#         success = _write_words_to_excel_core(words_to_save, DICT_EXCEL_PATH, DICT_SHEET_NAME)
+        
+#         # 4. 报告结果
+#         if success:
+#             new_total = current_total + len(words_to_save)
+#             UI.info("单词缓存已清空。")
+#             UI.success(f"当前熟词库 '{os.path.basename(DICT_EXCEL_PATH)}' 中共有 {new_total} 个单词。")
+#             os.remove(WORD_CACHE_FILE)
+#         else:
+#             UI.error("写入Excel失败。缓存文件已保留，下次启动将重试。")
+
+#     except Exception as e:
+#         UI.error(f"处理单词缓存时发生严重错误: {e}")
+#         UI.info("缓存文件已保留，下次启动将重试。")
+#     UI.separator()
+
+# def run_dictionary_loop(initial_word=None):
+#     UI.header("在线词典")
+#     UI.info(f"查到的单词将提议保存到: {DICT_EXCEL_PATH}")
+#     UI.info("全局指令: '1'语音朗读 | 'm'主菜单 | 'q'退出")
+#     UI.separator()
+#     word_to_save = None
+#     if initial_word:
+#         found = False
+#         if DICTIONARY_CHOICE == '1':
+#             found = get_word_definition(initial_word)
+#         elif DICTIONARY_CHOICE == '2':
+#             found = get_word_definition_merriam(initial_word)
+#         if found: word_to_save = initial_word
+#         UI.separator()
+        
+#     while True:
+#         prompt_text = f"是否保存单词 '{word_to_save}'? (Enter=保存, 或输入新单词/指令): " if word_to_save else "请输入单词 (或全局指令): "
+#         user_input = UI.prompt(prompt_text).strip()
+#         if word_to_save and user_input == '':
+#             save_word_to_cache(word_to_save, WORD_CACHE_FILE); word_to_save = None; UI.separator(); continue
+#         lower_input = user_input.lower()
+#         if lower_input in ['1', 'm', 'q']:
+#             if word_to_save: UI.info(f"操作取消，未保存单词 '{word_to_save}'。"); word_to_save = None
+#             if lower_input == '1': return 'SWITCH_TO_1'
+#             if lower_input == 'm': return 'GOTO_MENU'
+#             if lower_input == 'q': return 'QUIT'
+#         if word_to_save: UI.info(f"操作取消，未保存单词 '{word_to_save}'。"); word_to_save = None
+#         if not user_input: continue
+        
+#         found = False
+#         if DICTIONARY_CHOICE == '1':
+#             found = get_word_definition(user_input)
+#         elif DICTIONARY_CHOICE == '2':
+#             found = get_word_definition_merriam(user_input)
+        
+#         if found:
+#             word_to_save = user_input
+#         UI.separator()
+
+# if __name__ == "__main__":
+#     DICTIONARY_CHOICE = None
+#     def choose_dictionary():
+#         global DICTIONARY_CHOICE
+#         while DICTIONARY_CHOICE not in ['1', '2']:
+#             UI.header("词典选择")
+#             print("请选择您想使用的英英词典：")
+#             print("1. DictionaryAPI (免费, 简单)")
+#             print("2. Merriam-Webster (韦氏词典, 专业, 需API Key)")
+#             UI.separator()
+#             DICTIONARY_CHOICE = UI.prompt("请输入选择 (1 或 2): ").strip()
+#     choose_dictionary()
+
+#     voices_by_country = create_voice_map_dynamically(country_code_map, voices_by_country)
+#     process_word_cache_on_startup()
+#     current_app = 'menu'; user_quit = False
+#     try:
+#         while not user_quit:
+#             if current_app == 'menu':
+#                 UI.header("主菜单")
+#                 print("1. 交互式语音朗读程序")
+#                 print("2. 在线词典查询")
+#                 print("q. 退出程序")
+#                 UI.separator()
+#                 choice = UI.prompt("请输入你的选择 (1, 2, 或 q): ").strip().lower()
+#                 if choice == '1': current_app = '1'
+#                 elif choice == '2': current_app = '2'
+#                 elif choice == 'q':
+#                     if prompt_for_error_rerun():
+#                         current_app = '1'; continue
+#                     else: user_quit = True
+#                 else: UI.error("无效的选择。"); UI.separator()
+#             elif current_app == '1':
+#                 if not initialize_speech_app():
+#                     UI.error("初始化失败，返回主菜单。"); current_app = 'menu'; UI.separator(); continue
+#                 if current_index >= len(sentences):
+#                     if prompt_for_error_rerun(): continue
+#                     UI.success("所有句子已朗读完毕！返回主菜单。"); UI.separator()
+#                     speech_app_initialized = False; sentences = []; current_app = 'menu'
+#                     for f in [STATE_FILE, LEFTOVER_FILE]:
+#                         if os.path.exists(f): os.remove(f)
+#                     continue
+#                 action = handle_speech_interaction()
+#                 if isinstance(action, tuple) and action[0] == 'SWITCH_TO_2_WITH_WORD':
+#                     word_to_lookup_on_switch = action[1]; current_app = '2'
+#                 elif action == 'SWITCH_TO_2': current_app = '2'
+#                 elif action == 'GOTO_MENU': current_app = 'menu'
+#                 elif action == 'QUIT':
+#                     if prompt_for_error_rerun():
+#                         current_app = '1'; continue
+#                     else: user_quit = True
+#             elif current_app == '2':
+#                 if word_to_lookup_on_switch:
+#                     action = run_dictionary_loop(initial_word=word_to_lookup_on_switch); word_to_lookup_on_switch = None
+#                 else: action = run_dictionary_loop()
+#                 if action == 'SWITCH_TO_1': current_app = '1'
+#                 elif action == 'GOTO_MENU': current_app = 'menu'
+#                 elif action == 'QUIT': user_quit = True
+#     finally:
+#         UI.info("正在执行退出清理程序...")
+#         cleanup_on_exit(current_index, sentences)
+#         UI.info("程序已完全关闭。")
+#         UI.separator()
+
+
+
+

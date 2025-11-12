@@ -1,0 +1,1274 @@
+# =-============================================================================
+# 第0部分：导入库与全局初始化
+# ==============================================================================
+import edge_tts
+from gtts import gTTS
+import pygame
+import asyncio
+import os
+import pandas as pd
+import sys
+import random
+import time
+import threading
+from thefuzz import process
+import hashlib
+import shutil
+import subprocess
+import requests
+import openpyxl
+import json
+import difflib
+import string
+import re
+from datetime import datetime # Import datetime for timestamping
+
+TTS_ENGINE = None
+APP_MODE = None 
+
+try:
+    from aiohttp.client_exceptions import WSServerHandshakeError
+except ImportError:
+    class WSServerHandshakeError(Exception): pass
+
+class UnauthorizedError(Exception):
+    pass
+
+class bcolors:
+    RED = '\033[91m'; GREEN = '\033[92m'; YELLOW = '\033[93m'; BLUE = '\033[94m'; CYAN = '\033[96m'; ENDC = '\033[0m'
+class UI:
+    WIDTH = 60
+    @staticmethod
+    def separator(): print(bcolors.CYAN + "-" * UI.WIDTH + bcolors.ENDC)
+    @staticmethod
+    def header(text): width = 40; print(bcolors.BLUE + "#" * width + f"\n###{(text.center(width - 6))}###\n" + "#" * width + bcolors.ENDC); UI.separator()
+    @staticmethod
+    def prompt(text): response = input(f"{bcolors.YELLOW}❓ {text}{bcolors.ENDC}"); UI.separator(); return response
+    @staticmethod
+    def info(text): print(f"{bcolors.YELLOW}ℹ️  {text}{bcolors.ENDC}")
+    @staticmethod
+    def success(text): print(f"{bcolors.GREEN}✅ {text}{bcolors.ENDC}")
+    @staticmethod
+    def error(text): print(f"{bcolors.RED}❌ {text}{bcolors.ENDC}")
+
+pygame.mixer.init()
+UI.success("Pygame Mixer 已成功初始化。")
+UI.separator()
+
+# ==============================================================================
+# 第1部分：语音朗读应用 (代码1) - 核心函数与配置
+# ==============================================================================
+CACHE_DIR = "audio_cache"
+STATE_FILE = "run_state.txt"
+LEFTOVER_FILE = "leftover_sentences.txt"
+MODIFIED_STATE_FILE = "modified_run_state.json" # 虽然不再使用，但保留以备清理
+
+SPELLING_ERROR_FILE = "spelling_errors.txt"
+MODIFIED_SPELLING_ERROR_FILE = "modified_spelling_errors.txt"
+
+SPEECH_EXCEL_PATH = r'C:\Users\Administrator\Desktop\英国老鼠\工作簿1.xlsm'
+MODIFIED_BLIND_SPOT_LOG_PATH = r'C:\Users\Administrator\.spyder-py3\blind_spotting_log.xlsx'
+ORIGINAL_BLIND_SPOT_LOG_PATH = "blind_spotting_log.xlsx"
+
+# !!! 重要: 请将 "YourDictionaryFile.xlsm" 替换为您实际的本地词典文件名 !!!
+LOCAL_DICT_DATA_PATH = r'C:\Users\Administrator\Desktop\英国老鼠\数据库.xlsm'
+
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+VOICE_SCORE_FILE = "voice_scores.json"
+PRIMARY_RETRY_LIMIT = 50
+FALLBACK_RETRY_LIMIT = 10
+FALLBACK_COUNTRY = "United Kingdom"
+voices_by_country = { "United Kingdom": ["en-GB-RyanNeural", "en-GB-SoniaNeural"], "United States": ["en-US-JennyNeural", "en-US-GuyNeural"] }
+country_code_map = { "AU": "Australia", "GB": "United Kingdom", "UK": "United Kingdom", "US": "United States", "CA": "Canada", "IN": "India", "IE": "Ireland", "ZA": "South Africa", "CN": "China (Mainland)"}
+
+GTTS_VOICES = {
+    "United States": {"lang": "en", "tld": "com", "desc": "美式口音"}, "United Kingdom": {"lang": "en", "tld": "co.uk", "desc": "英式口音"},
+    "Australia": {"lang": "en", "tld": "com.au", "desc": "澳大利亚口音"}, "Canada": {"lang": "en", "tld": "ca", "desc": "加拿大口音"},
+    "India": {"lang": "en", "tld": "co.in", "desc": "印度口音"}, "Ireland": {"lang": "en", "tld": "ie", "desc": "爱尔兰口音"},
+    "South Africa": {"lang": "en", "tld": "co.za", "desc": "南非口音"}, "China (Mainland)": {"lang": "zh-cn", "tld": "com.hk", "desc": "中文普通话"}
+}
+
+modified_playback_list = []
+modified_current_index = 0
+modified_app_initialized = False
+
+def get_archive_sheet(workbook):
+    """Gets or creates the 'Archive' sheet in the workbook."""
+    archive_sheet_name = "Archive"
+    if archive_sheet_name in workbook.sheetnames:
+        return workbook[archive_sheet_name]
+    else:
+        archive_sheet = workbook.create_sheet(archive_sheet_name)
+        archive_sheet.append(["Sentence", "Voice Info", "User Input", "Deletion Timestamp"])
+        return archive_sheet
+
+def delete_specific_blind_spot_from_excel(filepath, sentence, user_input):
+    try:
+        workbook = openpyxl.load_workbook(filepath)
+        sheet = workbook.active
+        archive_sheet = get_archive_sheet(workbook)
+        row_deleted = False
+        
+        for row_index in range(sheet.max_row, 1, -1):
+            sentence_cell = sheet.cell(row=row_index, column=1).value
+            voice_info_cell = sheet.cell(row=row_index, column=2).value
+            user_input_cell = sheet.cell(row=row_index, column=3).value
+            
+            if (sentence_cell and str(sentence_cell).strip() == sentence and
+                user_input_cell and str(user_input_cell).strip() == user_input):
+                
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                archive_sheet.append([sentence_cell, voice_info_cell, user_input_cell, timestamp])
+                
+                sheet.delete_rows(row_index)
+                row_deleted = True
+                break
+        
+        if row_deleted:
+            workbook.save(filepath)
+            UI.success(f"已成功存档并删除指定的扫盲条目。")
+            return True
+        else:
+            UI.info("在文件中未找到完全匹配的条目进行删除。")
+            return False
+    except PermissionError:
+        UI.error(f"存档/删除行失败！请先关闭正在打开的Excel文件 '{filepath}'。")
+        return False
+    except Exception as e:
+        UI.error(f"存档/删除Excel行时发生未知错误: {e}")
+        return False
+
+def delete_multiple_rows_from_excel(filepath, rows_to_delete):
+    if not rows_to_delete:
+        return True
+    try:
+        workbook = openpyxl.load_workbook(filepath)
+        sheet = workbook.active
+        for row_num in sorted(rows_to_delete, reverse=True):
+            sheet.delete_rows(row_num)
+        workbook.save(filepath)
+        UI.success(f"启动清理完成：已从 '{os.path.basename(filepath)}' 删除了 {len(rows_to_delete)} 个未匹配的行。")
+        return True
+    except PermissionError:
+        UI.error(f"清理未匹配行失败！请先关闭正在打开的Excel文件 '{filepath}'。")
+        return False
+    except Exception as e:
+        UI.error(f"清理未匹配行时发生未知错误: {e}")
+        return False
+
+def load_voice_scores():
+    if not os.path.exists(VOICE_SCORE_FILE): return {}
+    try:
+        with open(VOICE_SCORE_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+    except (json.JSONDecodeError, IOError): return {}
+def save_voice_scores(scores):
+    try:
+        with open(VOICE_SCORE_FILE, 'w', encoding='utf-8') as f: json.dump(scores, f, indent=4)
+    except IOError: UI.error(f"无法写入声音评分文件 {VOICE_SCORE_FILE}")
+def update_voice_score(voice, change):
+    if '|' in voice: return
+    scores = load_voice_scores(); scores[voice] = scores.get(voice, 0) + change; save_voice_scores(scores)
+def get_prioritized_voices(country_voices, scores, tried_voices):
+    available_voices = [v for v in country_voices if v not in tried_voices]
+    return sorted(available_voices, key=lambda v: scores.get(v, 0), reverse=True)
+def handle_auth_error_and_exit():
+    UI.error("所有重试尝试均失败。这很可能是因为库版本过旧。正在尝试自动更新...");
+    try:
+        command = [sys.executable, "-m", "pip", "install", "--upgrade", "edge-tts"]; subprocess.run(command, capture_output=True, text=True, check=True); UI.success("'edge-tts' 库已成功更新！")
+    except Exception as e: UI.error(f"自动更新时发生错误: {e}")
+    UI.header("重要：请重启内核 (快捷键: Ctrl + .) 然后按 F5 重新运行程序。")
+    pygame.quit(); sys.exit(0)
+def run_async_task_in_thread(coro):
+    exception = None
+    def target():
+        nonlocal exception
+        try: loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop); loop.run_until_complete(coro); loop.close()
+        except Exception as e: exception = e
+    thread = threading.Thread(target=target); thread.start(); thread.join()
+    if exception: raise exception
+async def generate_speech_edge(text, voice, filename, retries=3):
+    for attempt in range(retries):
+        try: communicate = edge_tts.Communicate(text, voice); await communicate.save(filename); return
+        except edge_tts.exceptions.NoAudioReceived as e:
+            if attempt < retries - 1: await asyncio.sleep(1)
+            else: raise e
+
+def speak_sentence(text_to_speak, voice_id):
+    if not text_to_speak or not voice_id:
+        UI.error("speak_sentence 收到无效参数 (文本或声音ID为空)。")
+        return False
+    cached_filepath = ""
+    try:
+        sentence_hash = hashlib.md5(text_to_speak.encode('utf-8')).hexdigest()
+        safe_voice_id = voice_id.replace(":", "-").replace("|", "_")
+        cache_prefix = "gtts" if '|' in voice_id else "edge" 
+        cached_filename = f"{cache_prefix}_{sentence_hash}_{safe_voice_id}.mp3"
+        cached_filepath = os.path.join(CACHE_DIR, cached_filename)
+        
+        generated_new_file = False
+        if not os.path.exists(cached_filepath) or os.path.getsize(cached_filepath) == 0:
+            UI.info(f"... 正在为 '{text_to_speak}' 生成语音 ...")
+            if cache_prefix == 'edge':
+                speech_coroutine = generate_speech_edge(text_to_speak, voice_id, cached_filepath)
+                run_async_task_in_thread(speech_coroutine)
+            elif cache_prefix == 'gtts':
+                try:
+                    lang, tld = voice_id.split('|')
+                    UI.info(f"(gTTS 模式: lang='{lang}', tld='{tld}')")
+                    gtts_obj = gTTS(text=text_to_speak, lang=lang, tld=tld)
+                    gtts_obj.save(cached_filepath)
+                except Exception as gtts_error: UI.error(f"gTTS 生成音频时失败: {gtts_error}"); return False
+            if not os.path.exists(cached_filepath) or os.path.getsize(cached_filepath) == 0: UI.error("生成音频文件失败或文件为空。"); return False
+            generated_new_file = True
+        
+        pygame.mixer.music.load(cached_filepath); pygame.mixer.music.play(); UI.info(f"... 🔊 正在朗读: '{text_to_speak}' ...")
+
+        while pygame.mixer.music.get_busy(): time.sleep(0.1)
+        pygame.mixer.music.unload()
+        return 'GENERATED' if generated_new_file else 'CACHED'
+    except (WSServerHandshakeError, edge_tts.exceptions.NoAudioReceived, Exception) as e:
+        if cache_prefix == 'edge':
+            error_str = str(e).lower()
+            if "401" in error_str or "unauthorized" in error_str or ("status" in dir(e) and hasattr(e, 'status') and e.status == 401):
+                raise UnauthorizedError(f"Original error: {e}") from e
+        UI.error(f"发生网络或播放错误: {e}")
+        if isinstance(e, pygame.error) and cached_filepath and os.path.exists(cached_filepath): os.remove(cached_filepath)
+        return False
+
+def find_country_by_code(user_input, code_map):
+    if not user_input: return None
+    return code_map.get(user_input.upper())
+
+def cleanup_on_exit():
+    pygame.quit()
+    UI.info("Pygame Mixer 已被卸载。")
+    if APP_MODE == 'original':
+        if 'sentences' in globals() and sentences and 'current_index' in globals() and current_index < len(sentences):
+            UI.info("程序已退出。")
+            unread_sentences = sentences[current_index:]
+            with open(LEFTOVER_FILE, 'w', encoding='utf-8') as f:
+                for sentence in unread_sentences: f.write(sentence + '\n')
+            UI.info(f"已将 {len(unread_sentences)} 个未读句子保存到 '{LEFTOVER_FILE}'。")
+        else:
+            UI.success("所有句子已完成，程序正常结束。")
+            for f in [STATE_FILE, LEFTOVER_FILE]:
+                if os.path.exists(f): os.remove(f)
+    
+    elif APP_MODE == 'modified':
+        if os.path.exists(MODIFIED_STATE_FILE):
+            os.remove(MODIFIED_STATE_FILE)
+        UI.info("修改模式正常退出。")
+
+    if os.path.exists(CACHE_DIR):
+        try: shutil.rmtree(CACHE_DIR); UI.info(f"音频缓存目录 '{CACHE_DIR}' 已成功删除。")
+        except Exception as e: UI.error(f"清理缓存时发生错误: {e}")
+
+    UI.info("程序已完全关闭。"); UI.separator()
+
+def check_and_highlight_spelling(original_sentence, user_spelling):
+    translator = str.maketrans('', '', string.punctuation)
+    original_words = [word.translate(translator).lower() for word in original_sentence.split()]
+    user_words = [word.translate(translator).lower() for word in user_spelling.split()]
+    matcher = difflib.SequenceMatcher(None, original_words, user_words)
+    is_correct = True; highlighted_parts = []
+    original_sentence_words = original_sentence.split()
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        original_chunk = " ".join(original_sentence_words[i1:i2])
+        if tag == 'equal': highlighted_parts.append(original_chunk)
+        else:
+            is_correct = False
+            if original_chunk: highlighted_parts.append(f"{bcolors.RED}({original_chunk}){bcolors.ENDC}")
+    highlighted_string = " ".join(highlighted_parts)
+    return is_correct, highlighted_string
+
+def save_spelling_error_sentence(sentence):
+    error_file = MODIFIED_SPELLING_ERROR_FILE if APP_MODE == 'modified' else SPELLING_ERROR_FILE
+    if not sentence: return
+    try:
+        existing_errors = []
+        if os.path.exists(error_file):
+            with open(error_file, 'r', encoding='utf-8') as f: existing_errors = [line.strip() for line in f]
+        if sentence in existing_errors: UI.info(f"句子 '{sentence[:30]}...' 已存在于错误文件中。"); return
+        with open(error_file, 'a', encoding='utf-8') as f: f.write(sentence + '\n')
+        UI.info(f"已将错误句子 '{sentence[:30]}...' 记录到 {os.path.basename(error_file)}")
+    except Exception as e: UI.error(f"保存拼写错误时发生错误: {e}")
+
+def get_existing_blind_spot_entries(filepath):
+    if not os.path.exists(filepath): return set()
+    try:
+        workbook = openpyxl.load_workbook(filepath, read_only=True)
+        sheet = workbook.active
+        entries = set()
+        for row in sheet.iter_rows(min_row=2, min_col=3, max_col=3, values_only=True):
+            if row[0] is not None: entries.add(str(row[0]).strip())
+        return entries
+    except (PermissionError, Exception) as e:
+        UI.error(f"检查重复内容时无法读取 '{filepath}': {e}")
+        return set()
+
+def log_blind_spot_to_excel(sentence, voice_info, user_inputs):
+    log_path = MODIFIED_BLIND_SPOT_LOG_PATH
+    try:
+        if not user_inputs:
+            return False
+
+        if os.path.exists(log_path):
+            workbook = openpyxl.load_workbook(log_path)
+            sheet = workbook.active
+        else:
+            workbook = openpyxl.Workbook()
+            sheet = workbook.active
+            sheet.append(["Sentence", "Voice Info", "User Input"])
+        
+        start_row = sheet.max_row + 1
+        
+        for i, user_input in enumerate(user_inputs):
+            current_row = start_row + i
+            sheet.cell(row=current_row, column=1, value=sentence)
+            sheet.cell(row=current_row, column=2, value=voice_info)
+            sheet.cell(row=current_row, column=3, value=user_input)
+            
+        workbook.save(log_path)
+        UI.success(f"已成功将 {len(user_inputs)} 条新扫盲记录保存到 '{os.path.basename(log_path)}'。")
+        return True
+    except PermissionError:
+        UI.error(f"保存失败！请先关闭正在打开的Excel文件 '{log_path}'。")
+        return False
+    except Exception as e:
+        UI.error(f"写入扫盲日志时发生未知错误: {e}")
+        return False
+
+def print_available_voices(code_map):
+    UI.separator()
+    if TTS_ENGINE == 'edge':
+        print(f"🎤 {bcolors.CYAN}Edge-TTS 可用国家/地区及其代码：{bcolors.ENDC}")
+        available_countries = sorted(voices_by_country.keys())
+        if not available_countries: UI.info("没有找到可用的国家。"); UI.separator(); return
+        max_len = max(len(c) for c in available_countries)
+        num_columns = 2
+        while len(available_countries) % num_columns != 0: available_countries.append("")
+        num_rows = len(available_countries) // num_columns
+        for i in range(num_rows):
+            row_items = []
+            for j in range(num_columns):
+                country = available_countries[i + j * num_rows]
+                if country:
+                    codes = [k for k, v in code_map.items() if v == country]
+                    code_str = "/".join(codes)
+                    row_items.append(f"{bcolors.GREEN}{code_str:<5}{bcolors.ENDC} - {country:<{max_len}}")
+            print(" | ".join(row_items))
+    elif TTS_ENGINE == 'gtts':
+        print(f"🎤 {bcolors.CYAN}gTTS 可用口音列表：{bcolors.ENDC}")
+        for country, details in GTTS_VOICES.items():
+            codes = [k for k, v in code_map.items() if v == country]
+            code_str = "/".join(codes) if codes else "N/A"
+            print(f"{bcolors.GREEN}{code_str:<5}{bcolors.ENDC} - {country:<18} ({details['desc']})")
+    UI.separator()
+
+def create_voice_map_dynamically(code_map, fallback_voices):
+    UI.info("🌐 正在动态获取最新的 Edge-TTS 语音列表...")
+    UI.separator()
+    voices_by_country_dynamic = {}
+    async def fetch_and_build():
+        voices = await edge_tts.list_voices()
+        for voice in voices:
+            locale = voice.get('Locale', '')
+            parts = locale.split('-')
+            if len(parts) >= 2:
+                country_code = parts[1]
+                country_name = code_map.get(country_code.upper())
+                if country_name:
+                    if country_name not in voices_by_country_dynamic: voices_by_country_dynamic[country_name] = []
+                    voices_by_country_dynamic[country_name].append(voice['Name'])
+    try: run_async_task_in_thread(fetch_and_build())
+    except Exception as e: UI.error(f"动态获取语音列表时发生错误: {e}"); UI.info("将使用内置的备用语音列表。"); return fallback_voices
+    if not voices_by_country_dynamic: UI.error("未能动态获取到任何语音，将使用内置的备用语音列表。"); return fallback_voices
+    UI.success("成功构建了最新的 Edge-TTS 语音库！"); print_available_voices(code_map); return voices_by_country_dynamic
+
+def parse_excel_range(range_str, max_rows):
+    range_str = range_str.upper().strip()
+    if not range_str:
+        return 2, max_rows
+    
+    match = re.match(r'^C(\d+):C(\d+)$', range_str)
+    if not match:
+        UI.error("范围格式无效。请输入类似 'C1:C100' 的格式。")
+        return None, None
+    
+    start = int(match.group(1))
+    end = int(match.group(2))
+    
+    if start < 1 or end < start:
+        UI.error("范围无效。起始行必须小于等于结束行，且大于0。")
+        return None, None
+        
+    return start, end
+
+def find_exact_word_sequence(search_phrase_str, source_sentences):
+    translator = str.maketrans('', '', string.punctuation)
+    search_words = search_phrase_str.lower().translate(translator).split()
+    if not search_words:
+        return None
+
+    for sentence in source_sentences:
+        source_words = sentence.lower().translate(translator).split()
+        
+        len_search = len(search_words)
+        for i in range(len(source_words) - len_search + 1):
+            if source_words[i : i + len_search] == search_words:
+                return sentence
+    return None
+
+def run_sentence_replacement_logic():
+    UI.header("数据预处理 (修改模式)")
+    UI.info(f"源句子文件: {SPEECH_EXCEL_PATH}")
+    UI.info(f"目标扫盲日志: {MODIFIED_BLIND_SPOT_LOG_PATH}")
+    try:
+        df_sentences = pd.read_excel(SPEECH_EXCEL_PATH, header=None)
+        source_sentences = [str(s).strip() for s in df_sentences.iloc[:, 0].tolist() if pd.notna(s) and str(s).strip()]
+        if not source_sentences: UI.error("源句子文件为空或无法读取。"); return False
+        UI.info(f"成功读取 {len(source_sentences)} 个源句子。")
+        
+        if not os.path.exists(MODIFIED_BLIND_SPOT_LOG_PATH): UI.error(f"目标扫盲日志文件 '{MODIFIED_BLIND_SPOT_LOG_PATH}' 不存在。"); return False
+        workbook = openpyxl.load_workbook(MODIFIED_BLIND_SPOT_LOG_PATH)
+        sheet = workbook.active
+
+        start_row, end_row = None, None
+        while start_row is None:
+            range_input = UI.prompt(f"请输入要匹配的C列范围 (例如 C2:C100)，或直接回车匹配所有行 (1-{sheet.max_row}):")
+            start_row, end_row = parse_excel_range(range_input, sheet.max_row)
+            if start_row is None:
+                continue
+            end_row = min(end_row, sheet.max_row)
+
+        UI.info(f"将在行 {start_row} 到 {end_row} 的范围内进行匹配...")
+        
+        replacements_count = 0
+        for row_index in range(start_row, end_row + 1):
+            sheet.cell(row=row_index, column=1, value=None)
+            user_input = sheet.cell(row=row_index, column=3).value
+            if not user_input or not isinstance(user_input, str): continue
+            user_input = user_input.strip()
+            
+            best_sentence = find_exact_word_sequence(user_input, source_sentences)
+
+            if best_sentence:
+                original_sentence = sheet.cell(row=row_index, column=1).value
+                if original_sentence != best_sentence:
+                    sheet.cell(row=row_index, column=1, value=best_sentence)
+                    replacements_count += 1
+            else:
+                UI.info(f"对于扫盲词 '{user_input}', 在源文件中未找到完全匹配的句子。")
+
+        if replacements_count > 0: UI.success(f"在指定范围内找到并更新了 {replacements_count} 个句子。")
+        else: UI.info("在指定范围内所有句子均已是最新，无需更新。")
+        
+        workbook.save(MODIFIED_BLIND_SPOT_LOG_PATH)
+        UI.success(f"已成功保存更新后的扫盲日志 '{MODIFIED_BLIND_SPOT_LOG_PATH}'。")
+        UI.separator()
+        return True
+    except FileNotFoundError as e: UI.error(f"文件未找到: {e}"); return False
+    except PermissionError: UI.error(f"保存失败！请先关闭正在打开的Excel文件 '{MODIFIED_BLIND_SPOT_LOG_PATH}'。"); return False
+    except Exception as e: UI.error(f"处理Excel文件时发生未知错误: {e}"); return False
+
+# ==============================================================================
+# 第2部分：在线词典应用
+# ==============================================================================
+DICT_EXCEL_PATH = "C:/Users/Administrator/Desktop/英国老鼠/熟词.xlsx"; DICT_SHEET_NAME = "Sheet1"; WORD_CACHE_FILE = "word_cache.txt"
+MW_API_KEYS = ["aac6ea0e-417c-4eaf-ac85-0dc8f8a6ba13","93b2ec9c-d00c-4517-810a-ad2f8853fdfc"]; current_mw_api_key_index = 0
+def get_current_mw_api_key(): global current_mw_api_key_index; return MW_API_KEYS[current_mw_api_key_index] if MW_API_KEYS else None
+def switch_to_next_mw_api_key():
+    global current_mw_api_key_index
+    if len(MW_API_KEYS) <= 1: return
+    previous_index = current_mw_api_key_index; current_mw_api_key_index = (current_mw_api_key_index + 1) % len(MW_API_KEYS)
+    UI.info(f"🔄 API Key 切换: ...{MW_API_KEYS[previous_index][-6:]} -> ...{get_current_mw_api_key()[-6:]}")
+def print_mw_rate_limit_info(headers):
+    limit = headers.get('X-RateLimit-Limit'); remaining = headers.get('X-RateLimit-Remaining')
+    if limit and remaining: UI.info(f"📊 韦氏词典API: 剩余 {remaining}/{limit}"); sys.stdout.flush();
+    if remaining and int(remaining) <= 1: switch_to_next_mw_api_key()
+
+def lookup_word_in_local_excel(word_to_find):
+    UI.header("本地词典查询")
+    try:
+        workbook = openpyxl.load_workbook(LOCAL_DICT_DATA_PATH, read_only=True, data_only=True)
+        sheet = workbook['Sheet1']
+        
+        found = False
+        for row in sheet.iter_rows(min_row=2): 
+            word_cell_val = row[4].value # Column E (index 4)
+            
+            if word_cell_val and str(word_cell_val).strip().lower() == word_to_find.lower():
+                etymology = row[8].value      # Column I
+                definition = row[5].value     # Column F
+                encounter_count = row[6].value# Column G
+                memory_count = row[7].value   # Column H
+                
+                UI.info(f"单词: {bcolors.GREEN}{word_cell_val}{bcolors.ENDC}")
+                UI.info(f"释义: {definition if definition else 'N/A'}")
+                UI.info(f"词源: {etymology if etymology else 'N/A'}")
+                UI.info(f"遇见次数: {encounter_count if encounter_count else 'N/A'}")
+                UI.info(f"记忆次数: {memory_count if memory_count else 'N/A'}")
+                found = True
+                break
+        
+        if not found:
+            UI.info(f"在本地词典 '{os.path.basename(LOCAL_DICT_DATA_PATH)}' 中未找到 '{word_to_find}'。")
+
+    except FileNotFoundError:
+        UI.error(f"本地词典文件未找到: {LOCAL_DICT_DATA_PATH}")
+    except PermissionError:
+        UI.error(f"无法读取本地词典！请先关闭正在打开的Excel文件 '{os.path.basename(LOCAL_DICT_DATA_PATH)}'。")
+    except KeyError:
+        UI.error(f"在Excel文件 '{os.path.basename(LOCAL_DICT_DATA_PATH)}' 中找不到名为 'Sheet1' 的工作表。")
+    except Exception as e:
+        UI.error(f"读取本地词典时发生未知错误: {e}")
+    finally:
+        UI.separator()
+
+def get_word_definition_merriam(word):
+    if not word or not any(c.isalpha() for c in word):
+        UI.error(f"无效的查询输入: '{word}'")
+        return False
+
+    api_key = get_current_mw_api_key()
+    if not api_key:
+        UI.error("韦氏词典API Key列表为空。")
+        return False
+    
+    url = f"https://www.dictionaryapi.com/api/v3/references/collegiate/json/{word}?key={api_key}"
+    UI.header("韦氏词典 (在线)")
+    print(f"📚 {bcolors.CYAN}正在查询: {word}{bcolors.ENDC}")
+
+    for attempt in range(3):
+        try:
+            response = requests.get(url, timeout=10)
+            print_mw_rate_limit_info(response.headers)
+            
+            if response.status_code in [200, 404]:
+                break
+            
+            response.raise_for_status()
+
+        except requests.exceptions.RequestException as e:
+            UI.error(f"网络连接错误: {e} (尝试 {attempt + 1}/3)")
+            if attempt < 2:
+                UI.info("将在1秒后重试..."); time.sleep(1)
+            else:
+                UI.error("查询失败，已达到最大重试次数。")
+                return False
+    
+    try:
+        data = response.json()
+        if not data or not isinstance(data[0], dict):
+            suggestions = data if isinstance(data, list) and all(isinstance(i, str) for i in data) else []
+            UI.error(f"在线词典中没有找到单词 '{word}'。")
+            if suggestions: UI.info(f"拼写建议: {', '.join(suggestions)}")
+            return False
+
+        found_definition = False
+        print(f"单词: {bcolors.GREEN}{word.capitalize()}{bcolors.ENDC}")
+        for entry in data:
+            if isinstance(entry, dict) and entry.get('meta', {}).get('id', '').split(':')[0].lower() == word.lower():
+                if 'fl' in entry: print(f"\n【{bcolors.CYAN}{entry['fl']}{bcolors.ENDC}】")
+                if 'shortdef' in entry:
+                    for i, definition in enumerate(entry['shortdef']):
+                        print(f"  {i+1}. {definition.replace('{bc}', '').replace('{it}', '').replace('{/it}', '')}")
+                    found_definition = True
+        return found_definition
+    except Exception as e:
+        UI.error(f"解析在线词典数据时发生未知错误: {e}")
+        return False
+
+def save_word_to_cache(word, cache_filepath):
+    try:
+        with open(cache_filepath, 'a', encoding='utf-8') as f: f.write(word + '\n')
+        UI.success(f"单词 '{word}' 已缓存，将在下次启动时保存。")
+    except Exception as e: UI.error(f"缓存单词时发生错误: {e}")
+def _write_words_to_excel_core(words, filepath, sheetname):
+    if not words: return True
+    try:
+        directory = os.path.dirname(filepath)
+        if directory and not os.path.exists(directory): os.makedirs(directory)
+        workbook = openpyxl.load_workbook(filepath) if os.path.exists(filepath) else openpyxl.Workbook()
+        sheet = workbook[sheetname] if sheetname in workbook.sheetnames else workbook.create_sheet(sheetname)
+        target_row = 1
+        while sheet.cell(row=target_row, column=1).value is not None: target_row += 1
+        for word in words: sheet.cell(row=target_row, column=1, value=word); target_row += 1
+        workbook.save(filepath); UI.success(f"成功！{len(words)} 个缓存的单词已保存到Excel。"); return True
+    except PermissionError: UI.error(f"无法写入Excel！请先关闭正在打开的文件 '{filepath}'。"); return False
+    except Exception as e: UI.error(f"写入Excel时发生未知错误: {e}"); return False
+def get_word_definition(word):
+    UI.header("DictionaryAPI (在线)")
+    print(f"📚 {bcolors.CYAN}正在查询单词: {word}{bcolors.ENDC}"); url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
+    for attempt in range(3):
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()[0]; print(f"单词: {bcolors.GREEN}{data['word']}{bcolors.ENDC}")
+                for meaning in data['meanings']:
+                    print(f"\n【{bcolors.CYAN}{meaning['partOfSpeech']}{bcolors.ENDC}】")
+                    for i, definition in enumerate(meaning['definitions']): print(f"{i+1}. {definition['definition']}")
+                return True
+            elif response.status_code == 404: UI.error(f"抱歉，在线词典中没有找到单词 '{word}'。"); return False
+            else: UI.error(f"查询出错，状态码: {response.status_code} (尝试 {attempt + 1}/3)")
+        except requests.exceptions.RequestException as e: UI.error(f"网络连接错误: {e} (尝试 {attempt + 1}/3)")
+        if attempt < 2: UI.info("将在1秒后重试..."); time.sleep(1)
+    UI.error("查询失败，已达到最大重试次数。"); return False
+
+# ==============================================================================
+# 第3部分：应用切换逻辑
+# ==============================================================================
+speech_app_initialized = False; sentences = []; current_index = 0
+default_country = "United States"; last_used_voice = None; word_to_lookup_on_switch = None
+
+def initialize_speech_app():
+    global sentences, current_index, speech_app_initialized
+    if speech_app_initialized: return True
+    UI.info("正在初始化语音朗读程序...")
+    load_from_excel = True
+    if os.path.exists(LEFTOVER_FILE) and os.path.getsize(LEFTOVER_FILE) > 0:
+        with open(LEFTOVER_FILE, 'r', encoding='utf-8') as f: leftover = [line.strip() for line in f if line.strip()]
+        if leftover:
+            UI.separator(); choice = UI.prompt(f"检测到上次有 {len(leftover)} 句未读，是否继续？(Y/n): ").strip().lower()
+            if choice in ['y', 'yes', '']: sentences = leftover; load_from_excel = False
+    if load_from_excel:
+        try:
+            df = pd.read_excel(SPEECH_EXCEL_PATH, header=None); raw = df.iloc[:, 0].tolist()
+            sentences = [str(s).strip().replace('\n', ' ') for s in raw if pd.notna(s) and str(s).strip()]
+            if not sentences: UI.error(f"Excel文件 '{SPEECH_EXCEL_PATH}' 为空。"); UI.separator(); return False
+            UI.success(f"成功从Excel读取 {len(sentences)} 个句子并打乱顺序。"); random.shuffle(sentences)
+        except FileNotFoundError: UI.error(f"文件未找到 '{SPEECH_EXCEL_PATH}'。"); UI.separator(); return False
+        except Exception as e: UI.error(f"读取Excel时发生错误: {e}。"); UI.separator(); return False
+    start_index = 0
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f: content = f.read().strip()
+            if content:
+                saved_index_str, saved_hash = content.split('|')
+                current_hash = hashlib.md5("".join(sentences).encode('utf-8')).hexdigest()
+                if current_hash == saved_hash: start_index = int(saved_index_str)
+        except Exception: pass
+    current_index = start_index
+    UI.info(f"语音朗读准备就绪，将从第 {current_index + 1} 句开始。")
+    speech_app_initialized = True; return True
+
+def handle_spelling_session(sentence, voice):
+    typed_so_far = ""
+    while True:
+        print(f"\n✍️  当前已输入: {bcolors.CYAN}{typed_so_far}{bcolors.ENDC}"); prompt_text = "输入 '.' 提交, Enter 重听, 或继续输入: "
+        try: user_action = UI.prompt(prompt_text)
+        except (KeyboardInterrupt, EOFError): print("\n"); UI.error("拼写已取消。"); return None
+        if user_action == "": UI.info("...重听音频..."); speak_sentence(sentence, voice); UI.separator(); continue
+        if user_action == ".": return typed_so_far
+        typed_so_far = typed_so_far + " " + user_action if typed_so_far else user_action
+
+def handle_blind_spot_logging(sentence, voice_info_str):
+    blind_spot_input = UI.prompt("请输入您不熟悉的单词或词组，用英文逗号隔開: ").strip()
+    if not blind_spot_input: return
+    
+    user_items = [item.strip() for item in blind_spot_input.split(',') if item.strip()]
+    existing_entries = get_existing_blind_spot_entries(MODIFIED_BLIND_SPOT_LOG_PATH)
+    
+    valid_items_to_log, invalid_items, duplicate_items = [], [], []
+    translator = str.maketrans('', '', string.punctuation)
+    clean_sentence_words = [word.translate(translator).lower() for word in sentence.split()]
+    
+    for item in user_items:
+        clean_item_words = [word.translate(translator).lower() for word in item.split() if word]
+        if not clean_item_words: continue
+        
+        is_valid_phrase = False
+        item_len = len(clean_item_words)
+        for i in range(len(clean_sentence_words) - item_len + 1):
+            if clean_sentence_words[i:i + item_len] == clean_item_words:
+                is_valid_phrase = True
+                break
+        
+        if is_valid_phrase:
+            if item in existing_entries: duplicate_items.append(item)
+            else: valid_items_to_log.append(item)
+        else: invalid_items.append(item)
+    
+    if valid_items_to_log:
+        log_blind_spot_to_excel(sentence, voice_info_str, valid_items_to_log)
+
+    elif not invalid_items and not duplicate_items: 
+        UI.info("没有需要记录的新内容。")
+
+    if duplicate_items: UI.info(f"已有重复内容，已忽略: {', '.join(duplicate_items)}")
+    if invalid_items: UI.error(f"输入内容有误或未在句子中找到，已忽略: {', '.join(invalid_items)}")
+    UI.separator()
+
+def handle_speech_interaction():
+    global current_index, default_country, last_used_voice, sentences
+    
+    current_sentence = sentences[current_index]
+    print(f"🎤 {bcolors.CYAN}--- 语音朗读 ({current_index + 1}/{len(sentences)}) ---{bcolors.ENDC}")
+    print(f"   句子: '{current_sentence}'")
+    
+    played_successfully = False
+    
+    if TTS_ENGINE == 'gtts':
+        country_info = GTTS_VOICES.get(default_country)
+        if not country_info: UI.error(f"gTTS 不支持国家 '{default_country}'。请切换国家。"); last_used_voice = None
+        else:
+            voice_to_use = f"{country_info['lang']}|{country_info['tld']}"
+            if last_used_voice and last_used_voice != voice_to_use: UI.info(f"国家已变更，切换 gTTS 声音...")
+            last_used_voice = voice_to_use
+            if speak_sentence(current_sentence, last_used_voice): played_successfully = True
+    else:
+        if last_used_voice is None:
+            tried_voices_this_sentence = set()
+            voice_scores = load_voice_scores()
+            country_voices = voices_by_country.get(default_country, [])
+            candidate_voices = [v for v in country_voices if v != last_used_voice]
+            first_try_voice = random.choice(candidate_voices) if candidate_voices else (country_voices[0] if country_voices else None)
+            if first_try_voice:
+                tried_voices_this_sentence.add(first_try_voice)
+                try:
+                    UI.info(f"首次尝试 (随机选择，权重: {voice_scores.get(first_try_voice, 0)}): {first_try_voice}")
+                    result = speak_sentence(current_sentence, first_try_voice)
+                    if result:
+                        if result == 'GENERATED': update_voice_score(first_try_voice, 1)
+                        last_used_voice = first_try_voice; played_successfully = True
+                except UnauthorizedError:
+                    UI.error(f"首次尝试的声音 '{first_try_voice}' 授权失败。将启动健壮模式..."); update_voice_score(first_try_voice, -1)
+            if not played_successfully:
+                def attempt_playback_robust(country, limit, is_fallback=False):
+                    nonlocal played_successfully; global last_used_voice
+                    stage_name = "后备" if is_fallback else "主"; UI.info(f"{stage_name}重试 (基于权重): {country} (最多 {limit} 次)...")
+                    for attempt in range(limit):
+                        voices_to_try = voices_by_country.get(country, [])
+                        prioritized_list = get_prioritized_voices(voices_to_try, voice_scores, tried_voices_this_sentence)
+                        if not prioritized_list: UI.error(f"{stage_name}国家所有可用声音均已尝试。"); return
+                        current_voice = prioritized_list[0]; tried_voices_this_sentence.add(current_voice)
+                        try:
+                            UI.info(f"尝试{stage_name}声音 (权重: {voice_scores.get(current_voice, 0)}): {current_voice} ({attempt + 1}/{limit})")
+                            result = speak_sentence(current_sentence, current_voice)
+                            if result:
+                                if result == 'GENERATED': update_voice_score(current_voice, 1)
+                                last_used_voice = current_voice; played_successfully = True; return
+                        except UnauthorizedError: UI.error(f"声音 '{current_voice}' 授权失败。"); update_voice_score(current_voice, -1); time.sleep(0.5)
+                attempt_playback_robust(default_country, PRIMARY_RETRY_LIMIT)
+                if not played_successfully: attempt_playback_robust(FALLBACK_COUNTRY, FALLBACK_RETRY_LIMIT, is_fallback=True)
+        else:
+            UI.info(f"重复播放 (使用缓存声音，权重: {load_voice_scores().get(last_used_voice, 0)}): {last_used_voice}")
+            result = speak_sentence(current_sentence, last_used_voice)
+            if result: played_successfully = True
+            else: UI.error(f"缓存文件播放失败，将尝试重新选择声音。"); last_used_voice = None
+
+    if not played_successfully:
+        UI.error("播放失败，无法继续。")
+        if last_used_voice is None and TTS_ENGINE == 'edge': handle_auth_error_and_exit()
+        UI.separator(); return 'CONTINUE'
+
+    voice_info_str = "Unknown"
+    if last_used_voice:
+        if TTS_ENGINE == 'edge': voice_info_str = f"Edge-TTS: {default_country}, {last_used_voice}"
+        elif TTS_ENGINE == 'gtts':
+            try:
+                lang, tld = last_used_voice.split('|')
+                country_name = "Unknown Country"; desc = ""
+                for country, details in GTTS_VOICES.items():
+                    if details['lang'] == lang and details['tld'] == tld: country_name, desc = country, details.get('desc', ''); break
+                voice_info_str = f"gTTS: {country_name} ({desc})"
+            except: voice_info_str = f"gTTS: {last_used_voice}"
+
+    # Inner loop for non-moving commands
+    while True:
+        UI.separator()
+        prompt_text = "指令: (e)扫盲, (s)句子, (w)单词, (.)下一句, (l)上一句, (v)看语音库, (z)换人, (Enter)重听, (q)退出: "
+        user_input = UI.prompt(prompt_text).strip(); lower_input = user_input.lower()
+        
+        # Break for commands that move to the next/prev item or exit
+        if lower_input in ['.', '。', 'n', 'l', 'q', 'm', '2'] or (user_input and not lower_input in ['e','s','w','z','v',''] and not find_country_by_code(user_input, country_code_map)):
+             break
+
+        if lower_input == 'e':
+            handle_blind_spot_logging(current_sentence, voice_info_str)
+        elif lower_input == 's':
+            user_spelling = handle_spelling_session(current_sentence, last_used_voice)
+            if user_spelling is not None:
+                is_correct, highlighted_string = check_and_highlight_spelling(current_sentence, user_spelling)
+                print(f"✍️  {bcolors.CYAN}--- 拼写检查结果 ---{bcolors.ENDC}"); print(f"   结果: {highlighted_string}")
+                if is_correct: UI.success("句子拼写完全正确！")
+                else: UI.error("句子拼写有误。"); save_spelling_error_sentence(current_sentence)
+        elif lower_input == 'w':
+            user_words_input = handle_spelling_session(current_sentence, last_used_voice)
+            if user_words_input is not None:
+                translator = str.maketrans('', '', string.punctuation); clean_original_words = {word.translate(translator).lower() for word in current_sentence.split()}; user_words = user_words_input.split(); all_found = True; not_found_words = []
+                for word in user_words:
+                    if word.strip() and word.translate(translator).lower() not in clean_original_words: all_found = False; not_found_words.append(word)
+                if all_found: UI.success(f"单词/词组 '{user_words_input}' 均存在于句子中，拼写正确！")
+                else: UI.error(f"单词 '{', '.join(not_found_words)}' 不在句子中或拼写错误。"); save_spelling_error_sentence(current_sentence)
+        elif user_input == '':
+            speak_sentence(current_sentence, last_used_voice)
+        elif lower_input == 'z':
+            if TTS_ENGINE == 'gtts': UI.info("gTTS模式下无法切换单个声音，请使用国家代码切换口音。")
+            else:
+                last_used_voice = None # Signal to pick a new voice
+                speak_sentence(current_sentence, last_used_voice)
+        elif lower_input == 'v':
+            print_available_voices(country_code_map)
+        else:
+            matched_country = find_country_by_code(user_input, country_code_map)
+            if matched_country:
+                if TTS_ENGINE == 'gtts' and matched_country not in GTTS_VOICES:
+                    UI.error(f"gTTS 不支持国家 '{matched_country}'。请从 'v' 列表中选择。")
+                else:
+                    default_country = matched_country
+                    UI.info(f"国家已切换到: {default_country}。")
+                    if TTS_ENGINE == 'edge': last_used_voice = None
+                    speak_sentence(current_sentence, last_used_voice) # Replay with new country voice
+
+    # Handle commands that break the inner loop
+    if lower_input in ['.', '。', 'n']:
+        current_index += 1
+        last_used_voice = None
+    elif lower_input == 'l':
+        current_index = max(0, current_index - 1)
+        last_used_voice = None
+    elif lower_input == 'q': return 'QUIT'
+    elif lower_input == 'm': return 'GOTO_MENU'
+    elif lower_input == '2': return 'SWITCH_TO_2'
+    else:
+        return ('SWITCH_TO_2_WITH_WORD', user_input)
+    
+    return 'CONTINUE'
+
+def prompt_for_error_rerun(target_mode):
+    global sentences, current_index, speech_app_initialized
+    global modified_playback_list, modified_current_index, modified_app_initialized
+
+    error_file = MODIFIED_SPELLING_ERROR_FILE if target_mode == 'modified' else SPELLING_ERROR_FILE
+
+    if not os.path.exists(error_file) or os.path.getsize(error_file) == 0:
+        return False
+    
+    choice = UI.prompt(f"检测到 {os.path.basename(error_file)} 中有内容，是否开始复习？ (Y/n): ").strip().lower()
+    if choice in ['y', 'yes', '']:
+        UI.info(f"正在从 {os.path.basename(error_file)} 加载复习内容...")
+        try:
+            with open(error_file, 'r', encoding='utf-8') as f:
+                error_content = list(dict.fromkeys([line.strip() for line in f if line.strip()]))
+            if not error_content:
+                os.remove(error_file)
+                return False
+            
+            if target_mode == 'original':
+                sentences = error_content
+                current_index = 0
+                speech_app_initialized = True
+                random.shuffle(sentences)
+                UI.success(f"加载成功！将开始复习 {len(sentences)} 个错误项目。")
+            elif target_mode == 'modified':
+                df_log = pd.read_excel(MODIFIED_BLIND_SPOT_LOG_PATH)
+                log_data = {str(row['Sentence']).strip(): (row['Voice Info'], row['User Input'], row.name + 2) for index, row in df_log.iterrows() if pd.notna(row['Sentence'])}
+                
+                review_list = []
+                for sentence in error_content:
+                    if sentence in log_data:
+                        review_list.append([sentence] + list(log_data[sentence]))
+                    else:
+                        UI.info(f"错误句子 '{sentence[:30]}...' 在日志中未找到，已跳过。")
+                
+                if not review_list:
+                    UI.error("无法为任何错误句子找到对应的日志信息，无法开始复习。")
+                    os.remove(error_file)
+                    return False
+                
+                modified_playback_list = review_list
+                modified_current_index = 0
+                modified_app_initialized = True
+                UI.success(f"加载成功！将开始复习 {len(modified_playback_list)} 个错误项目。")
+
+            os.remove(error_file)
+            UI.separator()
+            return True
+        except Exception as e:
+            UI.error(f"从错误文件加载时出错: {e}")
+            if os.path.exists(error_file): os.remove(error_file)
+            UI.separator()
+            return False
+    else:
+        UI.info(f"好的，将清空并删除 {os.path.basename(error_file)}。")
+        if os.path.exists(error_file): os.remove(error_file)
+        UI.separator()
+        return False
+
+# ==============================================================================
+# 第4部分：主控制器
+# ==============================================================================
+def process_word_cache_on_startup():
+    if not os.path.exists(WORD_CACHE_FILE) or os.path.getsize(WORD_CACHE_FILE) == 0: return
+    UI.info("正在处理单词缓存..."); UI.separator()
+    try:
+        try: workbook = openpyxl.load_workbook(DICT_EXCEL_PATH); sheet = workbook[DICT_SHEET_NAME]; current_total = sheet.max_row
+        except (FileNotFoundError, KeyError): current_total = 0
+        with open(WORD_CACHE_FILE, 'r', encoding='utf-8') as f: words_to_save = list(dict.fromkeys([line.strip() for line in f if line.strip()]))
+        if not words_to_save: os.remove(WORD_CACHE_FILE); UI.info(f"当前熟词库 '{os.path.basename(DICT_EXCEL_PATH)}' 中共有 {current_total} 个单词。"); UI.separator(); return
+        success = _write_words_to_excel_core(words_to_save, DICT_EXCEL_PATH, DICT_SHEET_NAME)
+        if success:
+            new_total = current_total + len(words_to_save); UI.info("单词缓存已清空。"); UI.success(f"当前熟词库 '{os.path.basename(DICT_EXCEL_PATH)}' 中共有 {new_total} 个单词。"); os.remove(WORD_CACHE_FILE)
+        else: UI.error("写入Excel失败。缓存文件已保留，下次启动将重试。")
+    except Exception as e: UI.error(f"处理单词缓存时发生严重错误: {e}"); UI.info("缓存文件已保留，下次启动将重试。")
+    UI.separator()
+
+def run_dictionary_loop(initial_word=None):
+    # =================== FIX: Remove repetitive header ===================
+    # UI.header("在线词典")
+    # UI.info(f"查到的单词将提议保存到: {DICT_EXCEL_PATH}")
+    # UI.info("全局指令: '1'语音朗读 | 'm'主菜单 | 'q'退出")
+    # UI.separator()
+    # =====================================================================
+    
+    word_to_save = None
+    
+    def perform_lookup(word):
+        nonlocal word_to_save
+        lookup_word_in_local_excel(word)
+        found_online = get_word_definition_merriam(word) if DICTIONARY_CHOICE == '2' else get_word_definition(word)
+        if found_online:
+            word_to_save = word
+        else:
+            word_to_save = None # Clear if not found online
+        UI.separator()
+    
+    if initial_word:
+        perform_lookup(initial_word)
+
+    while True:
+        prompt_text = f"是否保存单词 '{word_to_save}'? (Enter=保存, 或输入新单词/指令): " if word_to_save else "请输入单词 (或全局指令): "
+        user_input = UI.prompt(prompt_text).strip()
+        
+        if word_to_save and user_input == '':
+            save_word_to_cache(word_to_save, WORD_CACHE_FILE)
+            word_to_save = None
+            continue
+            
+        lower_input = user_input.lower()
+        if lower_input in ['1', 'm', 'q']:
+            if word_to_save: UI.info(f"操作取消，未保存单词 '{word_to_save}'。")
+            if lower_input == '1': return 'SWITCH_TO_1'
+            if lower_input == 'm': return 'GOTO_MENU'
+            if lower_input == 'q': return 'QUIT'
+            
+        if word_to_save: UI.info(f"操作取消，未保存单词 '{word_to_save}'。")
+        word_to_save = None 
+        
+        if not user_input:
+            continue
+        
+        perform_lookup(user_input)
+
+def initialize_modified_app():
+    global modified_playback_list, modified_current_index, modified_app_initialized
+    if modified_app_initialized: return True
+    
+    UI.info("正在初始化修改模式并进行数据同步...")
+    try:
+        df_sentences = pd.read_excel(SPEECH_EXCEL_PATH, header=None)
+        source_sentences_set = {str(s).strip() for s in df_sentences.iloc[:, 0].tolist() if pd.notna(s) and str(s).strip()}
+        if not source_sentences_set: 
+            UI.error(f"主句子文件 '{os.path.basename(SPEECH_EXCEL_PATH)}' 为空。")
+            return False
+
+        if not os.path.exists(MODIFIED_BLIND_SPOT_LOG_PATH):
+            UI.error(f"扫盲日志 '{os.path.basename(MODIFIED_BLIND_SPOT_LOG_PATH)}' 不存在。")
+            return False
+        df_log = pd.read_excel(MODIFIED_BLIND_SPOT_LOG_PATH)
+
+        matched_items = []
+        unmatched_rows_to_delete = []
+        for index, row in df_log.iterrows():
+            log_sentence = str(row.get('Sentence', '')).strip()
+            original_row_num = index + 2
+
+            if log_sentence and log_sentence in source_sentences_set:
+                item_data = (row.get('Voice Info'), row.get('User Input'), original_row_num)
+                matched_items.append([log_sentence] + list(item_data))
+            elif log_sentence:
+                unmatched_rows_to_delete.append(original_row_num)
+                UI.info(f"发现未匹配行 (日志第 {original_row_num} 行): '{log_sentence[:30]}...' 将被清理。")
+        
+        if unmatched_rows_to_delete:
+            if not delete_multiple_rows_from_excel(MODIFIED_BLIND_SPOT_LOG_PATH, unmatched_rows_to_delete):
+                UI.error("清理未匹配行失败，无法安全继续。")
+                return False
+        
+        modified_playback_list = matched_items
+        if not modified_playback_list:
+            UI.error("未能构建任何可朗读的项目 (扫盲日志中的句子在主文件中均未找到，或日志为空)。")
+            return False
+
+        modified_current_index = 0
+        modified_app_initialized = True
+        UI.success(f"数据同步完成，成功构建 {len(modified_playback_list)} 条朗读任务。")
+        return True
+
+    except FileNotFoundError as e:
+        UI.error(f"文件未找到: {e}")
+        return False
+    except Exception as e:
+        UI.error(f"初始化修改模式时出错: {e}")
+        return False
+
+def run_modified_speech_app():
+    global modified_current_index, word_to_lookup_on_switch, modified_app_initialized, modified_playback_list, default_country
+    
+    session_voice_override = None
+
+    while modified_current_index < len(modified_playback_list):
+        current_item = modified_playback_list[modified_current_index]
+        sentence, voice_info, user_input_text, original_row = current_item
+        
+        active_voice_id = None
+        try:
+            if TTS_ENGINE == 'gtts':
+                country_info = GTTS_VOICES.get(default_country)
+                if not country_info:
+                    UI.error(f"gTTS 不支持当前国家 '{default_country}'。请使用国家代码切换。")
+                    modified_current_index += 1
+                    continue
+                active_voice_id = f"{country_info['lang']}|{country_info['tld']}"
+                UI.info(f"gTTS 模式已激活。使用 '{default_country}' 的声音。")
+            else:
+                default_voice_id = None
+                match = re.search(r'([a-z]{2}-[A-Z]{2}-\w+Neural)', str(voice_info))
+                if match:
+                    default_voice_id = match.group(1)
+                else:
+                    match_old = re.search(r'\(([a-z]{2}-[A-Z]{2}),\s*(\w+Neural)\)', str(voice_info))
+                    if match_old:
+                        default_voice_id = f"{match_old.group(1)}-{match_old.group(2)}"
+                    else:
+                        raise ValueError("在Voice Info中找不到有效的Edge-TTS语音ID")
+                if not default_voice_id: raise ValueError("无法解析默认声音ID")
+                
+                active_voice_id = session_voice_override if session_voice_override else default_voice_id
+                if session_voice_override is None:
+                    UI.info(f"已加载默认声音: {active_voice_id}")
+
+        except Exception as e:
+            UI.error(f"解析默认声音失败 ('{voice_info}'): {e}。将从列表中移除此条目。")
+            modified_playback_list.pop(modified_current_index)
+            continue
+            
+        print(f"🎤 {bcolors.CYAN}--- 修改模式 ({modified_current_index + 1}/{len(modified_playback_list)}) ---")
+        print(f"   (Excel 原始行号: {original_row})")
+        print(f"   扫盲词: '{user_input_text}'")
+        print(f"   完整句: '{sentence}'")
+        print(f"   声  音: {voice_info} (当前使用: {active_voice_id})")
+        UI.separator()
+        
+        speak_sentence(user_input_text, active_voice_id)
+        UI.info("... 1秒后朗读完整句子 ...")
+        time.sleep(1)
+        speak_sentence(sentence, active_voice_id)
+
+        while True:
+            UI.separator()
+            prompt_text = "指令: (e)扫盲, (s)句子, (w)单词, (.)下一句/删除, (l)上一句, (z)换人, (Enter)重听, (q)退出: "
+            user_command = UI.prompt(prompt_text).strip().lower()
+
+            if user_command in ['.', '。', 'n', 'l', 'q', 'm', '2'] or (user_command and not user_command in ['e','s','w','z','v',''] and not find_country_by_code(user_command, country_code_map)):
+                break
+
+            if user_command == 'e':
+                handle_blind_spot_logging(sentence, voice_info)
+            elif user_command == 's':
+                user_spelling = handle_spelling_session(sentence, active_voice_id)
+                if user_spelling is not None:
+                    is_correct, highlighted_string = check_and_highlight_spelling(sentence, user_spelling)
+                    print(f"✍️  {bcolors.CYAN}--- 拼写检查结果 ---{bcolors.ENDC}"); print(f"   结果: {highlighted_string}")
+                    if is_correct: UI.success("句子拼写完全正确！")
+                    else: UI.error("句子拼写有误。"); save_spelling_error_sentence(sentence)
+            elif user_command == 'w':
+                user_words_input = handle_spelling_session(sentence, active_voice_id)
+                if user_words_input is not None:
+                    translator = str.maketrans('', '', string.punctuation)
+                    clean_original_words = {word.translate(translator).lower() for word in sentence.split()}
+                    user_words = user_words_input.split()
+                    all_found, not_found_words = True, []
+                    for word in user_words:
+                        if word.strip() and word.translate(translator).lower() not in clean_original_words:
+                            all_found, not_found_words = False, not_found_words + [word]
+                    if all_found: UI.success(f"单词/词组 '{user_words_input}' 均存在于句子中，拼写正确！")
+                    else: UI.error(f"单词 '{', '.join(not_found_words)}' 不在句子中或拼写错误。"); save_spelling_error_sentence(sentence)
+            elif user_command == 'z':
+                if TTS_ENGINE == 'edge':
+                    UI.info("正在尝试切换声音...")
+                    country = None
+                    match = re.search(r'Edge-TTS:\s*([^,]+),', str(voice_info))
+                    if match:
+                        country_name_part = match.group(1).strip()
+                        if country_name_part in voices_by_country: country = country_name_part
+                    if country:
+                        available_voices = [v for v in voices_by_country[country] if v != active_voice_id]
+                        if available_voices:
+                            new_voice = random.choice(available_voices)
+                            session_voice_override = new_voice
+                            UI.success(f"已临时切换到新声音: {session_voice_override}")
+                            active_voice_id = new_voice
+                            speak_sentence(user_input_text, active_voice_id)
+                            UI.info("... 1秒后朗读完整句子 ...")
+                            time.sleep(1)
+                            speak_sentence(sentence, active_voice_id)
+                        else: UI.error(f"'{country}' 没有其他可用声音来切换。")
+                    else: UI.error("无法从声音信息中确定国家，无法切换。")
+                else:
+                    UI.info("gTTS模式下无法切换单个声音，请使用国家代码 (如 'uk', 'us') 切换口音。")
+            elif user_command == '':
+                speak_sentence(user_input_text, active_voice_id)
+                UI.info("... 1秒后朗读完整句子 ...")
+                time.sleep(1)
+                speak_sentence(sentence, active_voice_id)
+            else: 
+                matched_country = find_country_by_code(user_command, country_code_map)
+                if matched_country:
+                    default_country = matched_country
+                    UI.info(f"国家/口音已切换到: {default_country}。")
+                    session_voice_override = None 
+                    break 
+
+        if user_command in ['.', '。', 'n']:
+            if delete_specific_blind_spot_from_excel(MODIFIED_BLIND_SPOT_LOG_PATH, sentence, user_input_text):
+                modified_playback_list.pop(modified_current_index)
+            else:
+                modified_current_index += 1
+            session_voice_override = None 
+        elif user_command == 'l':
+            modified_current_index = max(0, modified_current_index - 1)
+            session_voice_override = None 
+        elif user_command == 'q': return 'QUIT'
+        elif user_command == 'm': return 'GOTO_MENU'
+        elif user_command == '2': return 'SWITCH_TO_2'
+        else:
+            word_to_lookup_on_switch = user_command
+            return 'SWITCH_TO_2_WITH_WORD'
+        
+    UI.success("所有任务已完成！"); 
+    return 'GOTO_MENU'
+
+if __name__ == "__main__":
+    def choose_app_mode():
+        global APP_MODE, speech_app_initialized, modified_app_initialized
+        APP_MODE = None
+        while APP_MODE not in ['original', 'modified']:
+            UI.header("运行模式选择")
+            print("请选择本次运行模式：")
+            print(f"1. {bcolors.GREEN}原模式{bcolors.ENDC} (从 '{os.path.basename(SPEECH_EXCEL_PATH)}' 读取并随机朗读)")
+            print(f"2. {bcolors.YELLOW}修改后模式{bcolors.ENDC} (以 '{os.path.basename(SPEECH_EXCEL_PATH)}' 为主线，读后删除扫盲日志对应行)")
+            UI.separator()
+            choice = UI.prompt("请输入选择 (1 或 2): ").strip()
+            if choice == '1': APP_MODE = 'original'; UI.success("已选择 原模式。")
+            elif choice == '2': APP_MODE = 'modified'; UI.success("已选择 修改后模式。")
+            else: UI.error("无效输入，请输入 1 或 2。")
+            UI.separator()
+        speech_app_initialized = False
+        modified_app_initialized = False
+
+    def choose_tts_engine():
+        global TTS_ENGINE
+        while TTS_ENGINE not in ['edge', 'gtts']:
+            UI.header("语音引擎选择")
+            print("请选择本次运行使用的语音引擎："); print(f"1. {bcolors.GREEN}Edge-TTS{bcolors.ENDC}"); print(f"2. {bcolors.YELLOW}gTTS{bcolors.ENDC}"); UI.separator()
+            choice = UI.prompt("请输入选择 (1 或 2): ").strip()
+            if choice == '1': TTS_ENGINE = 'edge'; UI.success("已选择 Edge-TTS 引擎。")
+            elif choice == '2': TTS_ENGINE = 'gtts'; UI.success("已选择 gTTS 引擎。")
+            else: UI.error("无效输入，请输入 1 或 2。")
+            UI.separator()
+    
+    choose_app_mode()
+    choose_tts_engine()
+
+    DICTIONARY_CHOICE = None
+    def choose_dictionary():
+        global DICTIONARY_CHOICE
+        while DICTIONARY_CHOICE not in ['1', '2']:
+            UI.header("词典选择"); print("1. DictionaryAPI"); print("2. Merriam-Webster"); UI.separator()
+            DICTIONARY_CHOICE = UI.prompt("请输入选择 (1 或 2): ").strip()
+    choose_dictionary()
+
+    if TTS_ENGINE == 'edge': voices_by_country = create_voice_map_dynamically(country_code_map, voices_by_country)
+    process_word_cache_on_startup()
+    
+    if APP_MODE == 'modified':
+        preprocess_choice = UI.prompt("是否需要在开始前运行数据预处理（匹配和更新句子）？ (y/N): ").lower()
+        if preprocess_choice == 'y':
+            if not run_sentence_replacement_logic():
+                UI.error("数据预处理失败，程序无法继续。"); sys.exit(1)
+
+    current_app = 'menu'
+    user_quit = False
+    try:
+        while not user_quit:
+            if current_app == 'menu':
+                UI.header("主菜单");
+                current_mode_display = "原模式" if APP_MODE == 'original' else "修改后模式"
+                print(f"1. 交互式语音朗读程序 (当前: {bcolors.GREEN}{current_mode_display}{bcolors.ENDC})")
+                print("2. 在线词典查询")
+                print("3. 切换学习模式")
+                print("q. 退出程序");
+                UI.separator()
+                choice = UI.prompt("请输入你的选择 (1, 2, 3 或 q): ").strip().lower()
+                if choice == '1': 
+                    current_app = '1_modified' if APP_MODE == 'modified' else '1'
+                elif choice == '2': current_app = '2'
+                elif choice == '3':
+                    choose_app_mode()
+                elif choice == 'q': user_quit = True
+                else: UI.error("无效的选择。"); UI.separator()
+            
+            elif current_app == '1_modified':
+                if not initialize_modified_app():
+                    UI.info("初始化失败或任务列表为空，返回主菜单。")
+                    current_app = 'menu'
+                    continue
+                
+                action = run_modified_speech_app()
+                
+                if action == 'GOTO_MENU':
+                    current_app = 'menu'
+                elif action == 'QUIT':
+                    user_quit = True
+                elif action == 'SWITCH_TO_2':
+                    current_app = '2'
+                elif action == 'SWITCH_TO_2_WITH_WORD':
+                    action_dict = run_dictionary_loop(word_to_lookup_on_switch if word_to_lookup_on_switch else None)
+                    word_to_lookup_on_switch = None
+                    if action_dict == 'QUIT': user_quit = True
+                    current_app = '1_modified'
+                
+            elif current_app == '1':
+                if not initialize_speech_app(): current_app = 'menu'; continue
+                
+                if current_index >= len(sentences):
+                    if prompt_for_error_rerun('original'):
+                        continue
+                    else:
+                        UI.success("所有句子已朗读完毕！返回主菜单。"); UI.separator(); speech_app_initialized = False; sentences = []; current_app = 'menu'
+                        for f in [STATE_FILE, LEFTOVER_FILE]:
+                            if os.path.exists(f): os.remove(f)
+                        continue
+
+                action = handle_speech_interaction()
+                if isinstance(action, tuple) and action[0] == 'SWITCH_TO_2_WITH_WORD': word_to_lookup_on_switch = action[1]; current_app = '2'
+                elif action == 'SWITCH_TO_2': current_app = '2'
+                elif action == 'GOTO_MENU': current_app = 'menu'
+                elif action == 'QUIT':
+                    if prompt_for_error_rerun('original'):
+                        current_app = 'menu'
+                    else:
+                        user_quit = True
+            
+            elif current_app == '2':
+                action = run_dictionary_loop(word_to_lookup_on_switch if word_to_lookup_on_switch else None); word_to_lookup_on_switch = None
+                if action == 'SWITCH_TO_1': 
+                    current_app = '1_modified' if APP_MODE == 'modified' else '1'
+                elif action == 'GOTO_MENU': current_app = 'menu'
+                elif action == 'QUIT': user_quit = True
+    finally:
+        UI.info("正在执行退出清理程序..."); 
+        cleanup_on_exit()

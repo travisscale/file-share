@@ -1,39 +1,40 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Nov 12 19:01:05 2025
-
-@author: Administrator
-"""
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>临时文件分享板</title>
+    <title>临时文件分享板 (多文件版)</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; max-width: 700px; margin: 50px auto; padding: 25px; border: 1px solid #e0e0e0; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.05); }
         .container { text-align: center; }
         h1 { color: #333; }
         p { color: #666; }
         .upload-section { margin-top: 30px; padding: 20px; background-color: #f9f9f9; border-radius: 8px; }
-        .download-section { margin-top: 30px; padding: 20px; background-color: #e7f3ff; border: 1px solid #b3d7ff; border-radius: 8px; }
-        .download-section a { font-size: 1.2em; font-weight: bold; color: #0056b3; text-decoration: none; }
+        .download-section { margin-top: 30px; padding: 20px; background-color: #e7f3ff; border: 1px solid #b3d7ff; border-radius: 8px; text-align: left; }
+        .download-section ul { list-style-type: none; padding-left: 0; }
+        .download-section li { margin: 10px 0; padding: 10px; background-color: #fff; border-radius: 5px; }
+        .download-section a { font-size: 1.1em; font-weight: 500; color: #0056b3; text-decoration: none; }
         .download-section a:hover { text-decoration: underline; }
-        .no-file { color: #888; font-style: italic; }
+        .no-file { text-align: center; color: #888; font-style: italic; }
         input[type="submit"] { padding: 10px 20px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px; }
         input[type="submit"]:hover { background-color: #218838; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>临时文件分享板</h1>
-        <p>上传一个文件，任何人都可以通过此页面下载。新文件的上传会覆盖旧文件。</p>
+        <h1>临时文件分享板 (多文件版)</h1>
+        <p>一次可以上传多个文件。新的上传会覆盖所有旧文件。</p>
 
-        <!-- 下载区域: 根据后端传来的 filename 变量决定显示什么 -->
+        <!-- 下载区域 -->
         <div class="download-section">
-            <h2>当前可下载文件</h2>
-            {% if filename %}
-                <p><a href="{{ url_for('download_file', filename=filename) }}">{{ filename }}</a></p>
+            <h2 style="text-align: center;">当前可下载文件</h2>
+            <!-- 关键改动 1: 检查列表是否为空 -->
+            {% if filenames %}
+                <ul>
+                    <!-- 关键改动 2: 循环遍历列表来生成下载链接 -->
+                    {% for filename in filenames %}
+                        <li><a href="{{ url_for('download_file', filename=filename) }}">{{ filename }}</a></li>
+                    {% endfor %}
+                </ul>
             {% else %}
                 <p class="no-file">目前没有文件可供下载。</p>
             {% endif %}
@@ -43,7 +44,8 @@ Created on Wed Nov 12 19:01:05 2025
         <div class="upload-section">
             <h2>上传新文件</h2>
             <form method="post" enctype="multipart/form-data">
-                <input type="file" name="file" required>
+                <!-- 关键改动 3: 添加 multiple 属性 -->
+                <input type="file" name="file" multiple required>
                 <br>
                 <input type="submit" value="上传并分享">
             </form>
