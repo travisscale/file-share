@@ -1,9 +1,16 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Nov 13 06:06:50 2025
+
+@author: Administrator
+"""
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>登录</title>
+    <title>管理员登录</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
     <style>
         body {
@@ -25,9 +32,9 @@
 </head>
 <body>
     <div class="login-form">
-        <h2 class="text-center mb-4">登录</h2>
+        <h2 class="text-center mb-4">管理员登录</h2>
         
-        <!-- 显示 Flash 消息，例如密码错误、IP锁定等 -->
+        <!-- 显示 Flash 消息 -->
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -36,13 +43,16 @@
             {% endif %}
         {% endwith %}
 
-        <form method="POST" action="{{ url_for('login') }}">
+        <form method="POST" action="{{ url_for('admin_login') }}">
             <div class="mb-3">
-                <label for="password" class="form-label">密码</label>
-                <input type="password" class="form-control" id="password" name="password" required autofocus>
+                <label for="password" class="form-label">管理员密码</label>
+                <input type="password" class="form-control" id="password" name="password" required>
             </div>
-            <button type="submit" class="btn btn-primary w-100">登录</button>
+            <button type="submit" class="btn btn-warning w-100">确认登录</button>
         </form>
+        <div class="text-center mt-3">
+            <a href="{{ url_for('index') }}">返回主页</a>
+        </div>
     </div>
 </body>
 </html>

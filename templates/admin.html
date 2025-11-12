@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理面板</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
+    <style>
+        /* --- 这是本次修改的核心 --- */
+        .filename-cell {
+            word-wrap: break-word;
+            word-break: break-all;
+            max-width: 300px; 
+        }
+        .table {
+            table-layout: fixed;
+        }
+        /* ------------------------- */
+        .log-details { font-size: 0.9em; color: #6c757d; }
+    </style>
+</head>
+<body>
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1>管理面板</h1>
+        <div><a href="{{ url_for('index') }}" class="btn btn-primary">返回主页</a><a href="{{ url_for('logout') }}" class="btn btn-secondary">登出</a></div>
+    </div>
+
+    <!-- Flash 消息 (保持不变) -->
+    {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}{% for category, message in messages %}<div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button></div>{% endfor %}{% endif %}{% endwith %}
+
+    <!-- 文件管理 (已修改) -->
+    <div class="card mb-4">
+        <div class="card-header"><h3>文件管理</h3></div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped table-hover">
+                    <thead><tr><th>文件名</th><th>上传者</th><th>文件大小</th><th>上传时间</th><th>状态</th><th style="width: 250px;">操作</th></tr></thead>
+                    <tbody>
+                        {% for file in files %}
+                        <tr>
+                            <!-- 修改：添加了 class 和 title 属性 -->
+                            <td class="filename-cell" title="{{ file.original_filename }}">{{ file.original_filename }}</td>
+                            <td>{{ file.uploader }}</td>
+                            <td>{{ file.formatted_size }}</td>
+                            <td>{{ file.upload_time_str }}</td>
+                            <td>{% if file.permanent %}<span class="badge bg-success">永久</span>{% else %}<span class="badge bg-warning text-dark">临时</span>{% endif %}</td>
+                            <td>
+                                <form action="{{ url_for('toggle_status', filename=file.filename) }}" method="POST" class="d-inline"><button type="submit" class="btn btn-sm btn-outline-primary">切换状态</button></form>
+                                <form action="{{ url_for('delete_file', filename=file.filename) }}" method="POST" class="d-inline" onsubmit="return confirm('确定要永久删除这个文件吗？');"><button type="submit" class="btn btn-sm btn-danger">删除</button></form>
+                            </td>
+                        </tr>
+                        {% else %}<tr><td colspan="6" class="text-center">没有文件</td></tr>{% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- IP 管理 和 活动日志 (保持不变) -->
+    <div class="card mb-4">
+        <div class="card-header"><h3>IP 地址管理</h3></div>
+        <div class="card-body"><div class="row"><div class="col-md-4"><h5>当前黑名单</h5>{% if banned_ips %}<ul class="list-group">{% for ip in banned_ips %}<li class="list-group-item d-flex justify-content-between align-items-center">{{ ip }}<form action="{{ url_for('unban_ip') }}" method="POST" class="d-inline"><input type="hidden" name="ip_to_unban" value="{{ ip }}"><button type="submit" class="btn btn-sm btn-success">解封</button></form></li>{% endfor %}</ul>{% else %}<p>黑名单为空。</p>{% endif %}</div><div class="col-md-4"><h5>手动封禁 IP</h5><form action="{{ url_for('ban_ip') }}" method="POST"><div class="input-group"><input type="text" name="ip_to_ban" class="form-control" placeholder="输入IP地址..." required><button type="submit" class="btn btn-danger">封禁</button></div></form></div><div class="col-md-4"><h5>最近登录失败的IP</h5>{% if login_attempts %}<ul class="list-group">{% for ip, data in login_attempts.items() %}<li class="list-group-item d-flex justify-content-between align-items-center"><span>{{ ip }} (失败 {{ data.failures }} 次)</span><form action="{{ url_for('ban_ip') }}" method="POST" class="d-inline"><input type="hidden" name="ip_to_ban" value="{{ ip }}"><button type="submit" class="btn btn-sm btn-warning">快速封禁</button></form></li>{% endfor %}</ul>{% else %}<p>没有最近的登录失败记录。</p>{% endif %}</div></div></div>
+    </div>
+    <div class="card">
+        <div class="card-header"><h3>活动日志 (最新 100 条)</h3></div>
+        <div class="card-body"><div class="table-responsive"><table class="table table-sm"><thead><tr><th>时间</th><th>事件</th><th>IP地址</th><th>详情</th></tr></thead><tbody>{% for entry in activity_log %}<tr><td>{{ entry.timestamp.split('.')[0].replace('T', ' ') }}</td><td>{{ entry.event }}</td><td>{{ entry.ip_address }}</td><td class="log-details">{% if entry.event == 'file_upload' %}上传者: {{ entry.details.uploader }}, 文件: {{ entry.details.filename }}, 大小: {{ entry.details.size }}{% elif entry.event == 'file_download' %}文件: {{ entry.details.filename }}{% elif entry.details.banned_ip %}{{ entry.details.banned_ip }}{% elif entry.details.unbanned_ip %}{{ entry.details.unbanned_ip }}{% elif entry.details.filename %}文件: {{ entry.details.filename }}{% else %}-{% endif %}</td></tr>{% else %}<tr><td colspan="4" class="text-center">暂无活动记录。</td></tr>{% endfor %}</tbody></table></div></div>
+    </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>```
+

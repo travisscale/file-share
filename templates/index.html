@@ -3,164 +3,107 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>文件分享</title>
-    <!-- 引入 Bootstrap CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>文件共享</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
     <style>
-        .container { max-width: 800px; }
-        .file-list-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+        body { padding: 20px; }
+        .upload-form, .filter-form {
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 25px;
+            background-color: #f9f9f9;
         }
+        /* --- 这是本次修改的核心 --- */
+        .filename-cell {
+            /* 允许在长单词或 URL 地址内部进行换行 */
+            word-wrap: break-word;
+            word-break: break-all;
+            /* 可选：设置一个最大宽度，防止此列过宽 */
+            max-width: 350px; 
+        }
+        /* 确保整个表格布局在长文件名下保持稳定 */
+        .table {
+            table-layout: fixed;
+        }
+        /* ------------------------- */
     </style>
 </head>
 <body>
-    <div class="container mt-5">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1>文件分享</h1>
-            <a href="{{ url_for('logout') }}" class="btn btn-secondary">登出</a>
-        </div>
-
-        <!-- Flash 消息显示区 -->
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-                        {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-
-        <!-- 文件上传表单 -->
-        <div class="card mb-4">
-            <div class="card-body">
-                <h5 class="card-title">上传新文件</h5>
-                <p class="card-text text-muted">上传新文件将会替换掉所有旧文件。</p>
-                <!-- 注意：我们不再使用传统的 form 标签，因为提交将由 JS 控制 -->
-                <div class="mb-3">
-                    <label for="fileUpload" class="form-label">选择文件 (可多选)</label>
-                    <input class="form-control" type="file" id="fileUpload" multiple>
-                </div>
-                <button id="uploadButton" class="btn btn-primary">上传</button>
-
-                <!-- 进度条显示区域 -->
-                <div class="progress mt-3" id="progress-wrapper" style="display: none;">
-                    <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" 
-                         role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
-                         0%
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 文件列表 -->
-        <div class="card">
-            <div class="card-header">
-                当前文件
-            </div>
-            <ul class="list-group list-group-flush" id="file-list">
-                {% if filenames %}
-                    {% for filename in filenames %}
-                        <li class="list-group-item file-list-item">
-                            <span>{{ filename }}</span>
-                            <a href="{{ url_for('download_file', filename=filename) }}" class="btn btn-success btn-sm">下载</a>
-                        </li>
-                    {% endfor %}
+    <div class="container">
+        <!-- 页面头部 (保持不变) -->
+        <div class="d-flex justify-content-between align-items-center">
+            <h1>文件共享中心</h1>
+            <div>
+                {% if session.get('auth_level') == 'admin' %}
+                    <a href="{{ url_for('admin_panel') }}" class="btn btn-success">管理面板</a>
                 {% else %}
-                    <li class="list-group-item text-center text-muted" id="no-files-message">当前没有分享任何文件。</li>
+                    <a href="{{ url_for('admin_login') }}" class="btn btn-warning">管理员登录</a>
                 {% endif %}
-            </ul>
+                <a href="{{ url_for('logout') }}" class="btn btn-secondary">登出</a>
+            </div>
+        </div>
+        <hr>
+
+        <!-- 文件上传表单 (保持不变) -->
+        <div class="upload-form">
+            <h3>（上传共享文件)</h3>
+            <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
+                <div class="row">
+                    <div class="col-md-6 mb-3"><label for="uploader" class="form-label">上传者 (可选)</label><input type="text" class="form-control" id="uploader" name="uploader" placeholder="您的名字或昵称"></div>
+                    <div class="col-md-6 mb-3"><label for="remarks" class="form-label">备注 (可选)</label><input type="text" class="form-control" id="remarks" name="remarks" placeholder="关于文件的简短说明"></div>
+                </div>
+                <div class="mb-3"><label for="file" class="form-label">选择文件 (可多选)</label><input class="form-control" type="file" id="file" name="file" multiple></div>
+                <button type="submit" class="btn btn-primary">上传</button>
+            </form>
+            <div id="uploadStatus" class="mt-3"></div>
+        </div>
+        
+        <!-- 筛选和排序表单 (保持不变) -->
+        <div class="filter-form">
+             <h3>筛选与排序</h3>
+            <form method="GET" action="{{ url_for('index') }}"><div class="row g-3 align-items-end"><div class="col-md"><label for="filter-uploader" class="form-label">上传者</label><select id="filter-uploader" name="uploader" class="form-select"><option value="">所有上传者</option>{% for uploader in unique_uploaders %}<option value="{{ uploader }}" {% if uploader == current_filters.uploader %}selected{% endif %}>{{ uploader }}</option>{% endfor %}</select></div><div class="col-md"><label for="filter-status" class="form-label">状态</label><select id="filter-status" name="status" class="form-select"><option value="">所有状态</option><option value="permanent" {% if current_filters.status == 'permanent' %}selected{% endif %}>永久</option><option value="temporary" {% if current_filters.status == 'temporary' %}selected{% endif %}>临时</option></select></div><div class="col-md"><label for="filter-time" class="form-label">时间排序</label><select id="filter-time" name="sort_by_time" class="form-select"><option value="newest" {% if current_filters.sort_by_time == 'newest' %}selected{% endif %}>最新优先</option><option value="oldest" {% if current_filters.sort_by_time == 'oldest' %}selected{% endif %}>最早优先</option></select></div></div><div class="row g-3 align-items-end mt-2"><div class="col-md"><label for="search-remarks" class="form-label">备注包含</label><input type="text" id="search-remarks" name="remarks_search" class="form-control" placeholder="输入关键词..." value="{{ current_filters.remarks_search or '' }}"></div><div class="col-md"><label for="search-filename" class="form-label">文件名包含</label><input type="text" id="search-filename" name="filename_search" class="form-control" placeholder="输入关键词..." value="{{ current_filters.filename_search or '' }}"></div></div><div class="mt-3"><button type="submit" class="btn btn-success">筛选</button><a href="{{ url_for('index') }}" class="btn btn-outline-secondary">重置筛选</a></div></form>
+        </div>
+
+        <!-- 文件列表 (已修改) -->
+        <h3>当前文件</h3>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover">
+                <thead><tr><th>文件名</th><th>上传者</th><th>备注</th><th>上传时间</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody>
+                    {% if files %}
+                        {% for file in files %}
+                        <tr>
+                            <!-- 修改：添加了 class 和 title 属性 -->
+                            <td class="filename-cell" title="{{ file.original_filename }}">{{ file.original_filename }}</td>
+                            <td>{{ file.uploader }}</td>
+                            <td>{{ file.remarks }}</td>
+                            <td>{{ file.upload_time_str }}</td>
+                            <td>{% if file.permanent %}<span class="badge bg-success">永久 (管理员)</span>{% else %}<span class="badge bg-warning text-dark">临时 (30分钟)</span>{% endif %}</td>
+                            <td><a href="{{ url_for('download_file', filename=file.filename) }}" class="btn btn-sm btn-info">下载</a></td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr><td colspan="6" class="text-center">没有找到符合条件的文件。</td></tr>
+                    {% endif %}
+                </tbody>
+            </table>
         </div>
     </div>
 
-    <!-- 引入 Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    
-    <!-- JavaScript 上传逻辑 -->
+    <!-- AJAX 上传的 JavaScript (保持不变) -->
     <script>
-        const fileInput = document.getElementById('fileUpload');
-        const uploadButton = document.getElementById('uploadButton');
-        const progressBar = document.getElementById('progress-bar');
-        const progressWrapper = document.getElementById('progress-wrapper');
-        const fileList = document.getElementById('file-list');
-        const noFilesMessage = document.getElementById('no-files-message');
-
-        uploadButton.addEventListener('click', () => {
-            const files = fileInput.files;
-            if (files.length === 0) {
-                alert('请先选择要上传的文件！');
-                return;
-            }
-
-            // 创建 FormData 对象来存放文件
-            const formData = new FormData();
-            for (let i = 0; i < files.length; i++) {
-                formData.append('file', files[i]);
-            }
-
-            // 创建 XMLHttpRequest 对象
-            const xhr = new XMLHttpRequest();
-
-            // 监听上传进度
-            xhr.upload.addEventListener('progress', (event) => {
-                if (event.lengthComputable) {
-                    const percentComplete = Math.round((event.loaded / event.total) * 100);
-                    progressWrapper.style.display = 'block';
-                    progressBar.style.width = percentComplete + '%';
-                    progressBar.setAttribute('aria-valuenow', percentComplete);
-                    progressBar.innerText = percentComplete + '%';
-                }
-            });
-
-            // 监听上传完成
-            xhr.addEventListener('load', () => {
-                progressBar.classList.remove('progress-bar-animated');
-                if (xhr.status === 200) {
-                    progressBar.classList.add('bg-success');
-                    progressBar.innerText = '上传成功!';
-                    const response = JSON.parse(xhr.responseText);
-                    // 短暂延迟后刷新页面，以显示最新的 flash 消息和文件列表
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1000);
-                } else {
-                    progressBar.classList.add('bg-danger');
-                    const response = JSON.parse(xhr.responseText);
-                    progressBar.innerText = '上传失败: ' + (response.error || '未知错误');
-                }
-            });
-
-            // 监听上传错误
-            xhr.addEventListener('error', () => {
-                progressWrapper.style.display = 'block';
-                progressBar.classList.add('bg-danger');
-                progressBar.innerText = '网络错误，上传失败！';
-            });
-            
-            // 配置并发送请求
-            xhr.open('POST', '{{ url_for("upload_files") }}', true);
-            xhr.send(formData);
-
-            // 禁用按钮，防止重复提交
-            uploadButton.disabled = true;
-            uploadButton.innerText = '上传中...';
+        document.getElementById('uploadForm').addEventListener('submit', function(event) {
+            event.preventDefault(); const form = event.target; const formData = new FormData(form); const statusDiv = document.getElementById('uploadStatus');
+            statusDiv.innerHTML = '<div class="alert alert-info">正在上传，请稍候...</div>';
+            fetch('/upload', { method: 'POST', body: formData })
+            .then(response => { if (!response.ok) { return response.json().then(err => Promise.reject(err)); } return response.json(); })
+            .then(data => {
+                if (data.success) { statusDiv.innerHTML = `<div class="alert alert-success">${data.success}</div>`; setTimeout(() => window.location.href = window.location.href, 1000); } 
+                else { statusDiv.innerHTML = `<div class="alert alert-danger">${data.error || '上传失败，未知错误。'}</div>`; }
+            })
+            .catch(error => { console.error('Upload Error:', error); statusDiv.innerHTML = `<div class="alert alert-danger">上传失败: ${error.error || '请检查网络连接或联系管理员。'}</div>`; });
         });
-
-        // 当选择新文件后，重置进度条和按钮状态
-        fileInput.addEventListener('change', () => {
-            progressWrapper.style.display = 'none';
-            progressBar.style.width = '0%';
-            progressBar.setAttribute('aria-valuenow', 0);
-            progressBar.innerText = '0%';
-            progressBar.classList.remove('bg-success', 'bg-danger');
-            progressBar.classList.add('progress-bar-animated');
-            uploadButton.disabled = false;
-            uploadButton.innerText = '上传';
-        });
-
     </script>
 </body>
 </html>
