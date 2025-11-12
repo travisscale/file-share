@@ -1,75 +1,63 @@
 import os
-from flask import Flask, render_template, request, redirect, url_for
-import pandas as pd
+from flask import Flask, render_template, request, redirect, url_for, send_from_directory
+from werkzeug.utils import secure_filename
 
-# 初始化 Flask 应用
 app = Flask(__name__)
 
-# 设置一个上传文件的保存目录 (虽然我们不永久保存，但上传过程中需要一个临时位置)
-UPLOAD_FOLDER = 'uploads'
+# --- 配置 ---
+# 1. 设置文件上传的目标文件夹
+UPLOAD_FOLDER = 'shared_files'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# 允许上传的文件类型
-ALLOWED_EXTENSIONS = {'xlsx', 'xls'}
+# 2. 全局变量，用来追踪当前被分享的文件名
+#    服务器启动时，没有任何文件被分享
+CURRENT_FILENAME = None
 
-def allowed_file(filename):
-    """检查文件名后缀是否在允许的范围内"""
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+# --- 路由 ---
 
-# 网站主页，现在是上传页面
 @app.route('/', methods=['GET', 'POST'])
-def upload_file():
-    # 如果是 POST 请求，意味着用户提交了文件
+def index():
+    global CURRENT_FILENAME # 声明我们要修改的是全局变量
+
+    # 如果是 POST 请求，处理文件上传
     if request.method == 'POST':
-        # 检查请求中是否包含文件部分
         if 'file' not in request.files:
-            return redirect(request.url) # 如果没有文件，刷新页面
-        
+            return redirect(request.url) # 如果表单里没有文件部分，刷新
+
         file = request.files['file']
 
-        # 如果用户没有选择文件，浏览器可能会提交一个空文件名
         if file.filename == '':
-            return redirect(request.url)
+            return redirect(request.url) # 如果没选择文件，刷新
 
-        # 如果文件存在且类型正确
-        if file and allowed_file(file.filename):
-            try:
-                # 直接用 pandas 从上传的文件流中读取 Excel 数据
-                # 不需要真的把文件保存到服务器硬盘上，更高效、更安全
-                df = pd.read_excel(file)
+        if file:
+            # 使用 secure_filename 防止恶意文件名
+            filename = secure_filename(file.filename)
+            
+            # --- 核心逻辑：先删除旧文件 ---
+            if CURRENT_FILENAME:
+                old_file_path = os.path.join(app.config['UPLOAD_FOLDER'], CURRENT_FILENAME)
+                if os.path.exists(old_file_path):
+                    os.remove(old_file_path)
+            
+            # 保存新文件
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            
+            # 更新全局变量，记录新的文件名
+            CURRENT_FILENAME = filename
+            
+            return redirect(url_for('index')) # 重定向到首页，显示新的下载链接
 
-                # --- 核心计算逻辑 ---
-                # 确保Excel至少有三列
-                if df.shape[1] < 3:
-                    error_message = "上传的 Excel 文件必须至少包含 A, B, C 三列。"
-                    return render_template('error.html', error=error_message)
+    # 如果是 GET 请求，就显示主页
+    # 把当前文件名传递给模板，让模板决定是否显示下载链接
+    return render_template('index.html', filename=CURRENT_FILENAME)
 
-                # 选择 A, B, C 三列 (在 pandas 中索引从0开始)
-                col_a = df.iloc[:, 0]
-                col_b = df.iloc[:, 1]
-                col_c = df.iloc[:, 2]
 
-                # 将列中非数字的内容转换为空值(NaN)，然后求和
-                sum_a = pd.to_numeric(col_a, errors='coerce').sum()
-                sum_b = pd.to_numeric(col_b, errors='coerce').sum()
-                sum_c = pd.to_numeric(col_c, errors='coerce').sum()
-
-                # 渲染结果页面，并把计算结果传递过去
-                return render_template('result.html', 
-                                       sum_a=f"{sum_a:,.2f}", 
-                                       sum_b=f"{sum_b:,.2f}", 
-                                       sum_c=f"{sum_c:,.2f}")
-
-            except Exception as e:
-                # 如果pandas读取失败或计算出错，显示一个错误页面
-                error_message = f"处理文件时出错: {e}。请确保上传的是有效的 Excel 文件，且 A-C 列包含数字。"
-                return render_template('error.html', error=error_message)
-
-    # 如果是 GET 请求，就显示上传表单
-    return render_template('upload.html')
+@app.route('/download/<path:filename>')
+def download_file(filename):
+    # 使用 send_from_directory 提供安全的文件下载功能
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
 
 
 if __name__ == '__main__':
